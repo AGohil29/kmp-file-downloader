@@ -1,0 +1,9 @@
+plugins {
+    `kotlin-dsl`
+}
+
+dependencies {
+    implementation(libs.gradlePlugin.kotlin)
+    implementation(libs.gradlePlugin.android)
+    implementation(libs.gradlePlugin.sqldelight)
+}
