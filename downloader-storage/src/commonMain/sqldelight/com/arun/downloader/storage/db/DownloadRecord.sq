@@ -1,0 +1,120 @@
+import com.arun.downloader.core.model.ConflictStrategy;
+import com.arun.downloader.core.model.DownloadPriority;
+
+CREATE TABLE DownloadRecordEntity (
+    id TEXT NOT NULL PRIMARY KEY,
+    url TEXT NOT NULL,
+    destination_directory TEXT NOT NULL,
+    file_name TEXT,
+    state TEXT NOT NULL,
+    priority TEXT AS DownloadPriority NOT NULL DEFAULT 'NORMAL',
+    downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+    total_bytes INTEGER,
+    etag TEXT,
+    last_modified TEXT,
+    conflict_strategy TEXT AS ConflictStrategy NOT NULL DEFAULT 'RENAME_NEW_INCREMENTAL',
+    error_type TEXT,
+    error_message TEXT,
+    created_at_epoch_ms INTEGER NOT NULL,
+    updated_at_epoch_ms INTEGER NOT NULL
+);
+
+CREATE INDEX idx_download_state ON DownloadRecordEntity(state);
+
+CREATE INDEX idx_download_priority ON DownloadRecordEntity(priority DESC, created_at_epoch_ms ASC);
+
+insertOrReplaceRecord:
+INSERT OR REPLACE INTO DownloadRecordEntity(
+    id,
+    url,
+    destination_directory,
+    file_name,
+    state,
+    priority,
+    downloaded_bytes,
+    total_bytes,
+    etag,
+    last_modified,
+    conflict_strategy,
+    error_type,
+    error_message,
+    created_at_epoch_ms,
+    updated_at_epoch_ms
+) VALUES (
+    :id,
+    :url,
+    :destinationDirectory,
+    :fileName,
+    :state,
+    :priority,
+    :downloadedBytes,
+    :totalBytes,
+    :etag,
+    :lastModified,
+    :conflictStrategy,
+    :errorType,
+    :errorMessage,
+    :createdAtEpochMs,
+    :updatedAtEpochMs
+);
+
+selectById:
+SELECT * FROM DownloadRecordEntity WHERE id = :id LIMIT 1;
+
+selectAll:
+SELECT * FROM DownloadRecordEntity ORDER BY created_at_epoch_ms DESC;
+
+selectByState:
+SELECT * FROM DownloadRecordEntity WHERE state = :state ORDER BY priority DESC, created_at_epoch_ms ASC;
+
+selectActiveDownloads:
+SELECT * FROM DownloadRecordEntity WHERE state IN ('QUEUED', 'CONNECTING', 'DOWNLOADING') ORDER BY priority DESC, created_at_epoch_ms ASC;
+
+updateState:
+UPDATE DownloadRecordEntity
+SET state = :state, updated_at_epoch_ms = :updatedAtEpochMs
+WHERE id = :id;
+
+updateConnectionHeaders:
+UPDATE DownloadRecordEntity
+SET total_bytes = :totalBytes,
+    etag = :etag,
+    last_modified = :lastModified,
+    state = 'DOWNLOADING',
+    updated_at_epoch_ms = :updatedAtEpochMs
+WHERE id = :id;
+
+updateProgress:
+UPDATE DownloadRecordEntity
+SET downloaded_bytes = :downloadedBytes,
+    updated_at_epoch_ms = :updatedAtEpochMs
+WHERE id = :id;
+
+markFailed:
+UPDATE DownloadRecordEntity
+SET state = 'FAILED',
+    error_type = :errorType,
+    error_message = :errorMessage,
+    updated_at_epoch_ms = :updatedAtEpochMs
+WHERE id = :id;
+
+markCompleted:
+UPDATE DownloadRecordEntity
+SET state = 'COMPLETED',
+    downloaded_bytes = total_bytes,
+    error_type = NULL,
+    error_message = NULL,
+    updated_at_epoch_ms = :updatedAtEpochMs
+WHERE id = :id;
+
+reconcileStaleStatesOnStartup:
+UPDATE DownloadRecordEntity
+SET state = 'PAUSED',
+    updated_at_epoch_ms = :reconciledAtEpochMs
+WHERE state IN ('CONNECTING', 'DOWNLOADING');
+
+deleteById:
+DELETE FROM DownloadRecordEntity WHERE id = :id;
+
+clearAll:
+DELETE FROM DownloadRecordEntity;
