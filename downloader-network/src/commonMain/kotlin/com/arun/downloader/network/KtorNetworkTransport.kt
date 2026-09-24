@@ -1,8 +1,9 @@
 package com.arun.downloader.network
 
 import com.arun.downloader.core.model.DownloadError
-import com.arun.downloader.network.model.NetworkRequest
-import com.arun.downloader.network.model.NetworkResponse
+import com.arun.downloader.core.model.NetworkRequest
+import com.arun.downloader.core.model.NetworkResponse
+import com.arun.downloader.core.repository.NetworkTransport
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.request.headers
@@ -15,7 +16,7 @@ import okio.IOException
 import kotlin.coroutines.cancellation.CancellationException
 
 class KtorNetworkTransport(
-    private val client: HttpClient
+    private val client: HttpClient,
 ) : NetworkTransport {
     override suspend fun execute(request: NetworkRequest): NetworkResponse {
         try {
@@ -84,23 +85,29 @@ class KtorNetworkTransport(
                     message = "Server rate limit hit (HTTP 429)."
                 )
             }
+
             HttpStatusCode.RequestTimeout.value,
-            HttpStatusCode.GatewayTimeout.value -> {
+            HttpStatusCode.GatewayTimeout.value,
+                -> {
                 throw DownloadError.Retryable.NetworkTimeout("HTTP timeout ($statusCode).")
             }
+
             HttpStatusCode.BadGateway.value,
             HttpStatusCode.ServiceUnavailable.value,
-            HttpStatusCode.InternalServerError.value -> {
+            HttpStatusCode.InternalServerError.value,
+                -> {
                 throw DownloadError.Retryable.ServerUnavailable(
                     httpCode = statusCode,
                     message = "Server temporary failure (HTTP $statusCode)."
                 )
             }
+
             HttpStatusCode.RequestedRangeNotSatisfiable.value -> {
                 throw DownloadError.NonRetryable.ServerDoesNotSupportRange(
                     message = "Requested byte range not satisfiable (HTTP 416)."
                 )
             }
+
             else -> {
                 throw DownloadError.NonRetryable.HttpError(
                     httpCode = statusCode,
@@ -115,8 +122,10 @@ class KtorNetworkTransport(
         return when (e) {
             is HttpRequestTimeoutException ->
                 DownloadError.Retryable.NetworkTimeout(message, e)
+
             is IOException ->
                 DownloadError.Retryable.ConnectionInterrupted(message, e)
+
             else -> {
                 // Catches platform-specific network/socket exceptions cleanly
                 if (e::class.simpleName?.contains("Timeout", ignoreCase = true) == true) {

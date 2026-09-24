@@ -1,7 +1,7 @@
 package com.arun.downloader.network
 
 import com.arun.downloader.core.model.DownloadError
-import com.arun.downloader.network.model.NetworkRequest
+import com.arun.downloader.core.model.NetworkRequest
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.ktor.client.HttpClient

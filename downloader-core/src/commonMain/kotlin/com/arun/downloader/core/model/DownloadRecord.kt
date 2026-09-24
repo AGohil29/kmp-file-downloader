@@ -1,4 +1,4 @@
-package com.arun.downloader.storage.repository
+package com.arun.downloader.core.model
 
 import com.arun.downloader.core.model.ConflictStrategy
 import com.arun.downloader.core.model.DownloadId

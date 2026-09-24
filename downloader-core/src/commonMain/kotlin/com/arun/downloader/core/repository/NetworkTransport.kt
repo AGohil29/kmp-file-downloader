@@ -1,7 +1,7 @@
-package com.arun.downloader.network
+package com.arun.downloader.core.repository
 
-import com.arun.downloader.network.model.NetworkRequest
-import com.arun.downloader.network.model.NetworkResponse
+import com.arun.downloader.core.model.NetworkRequest
+import com.arun.downloader.core.model.NetworkResponse
 
 interface NetworkTransport {
     /**

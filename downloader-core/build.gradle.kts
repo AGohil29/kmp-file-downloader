@@ -2,10 +2,12 @@ plugins {
     id("kmp-library")
 }
 
+val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
+
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":downloader-filesystem"))
+            implementation(libs.findLibrary("ktor-client-core").get())
         }
     }
 }

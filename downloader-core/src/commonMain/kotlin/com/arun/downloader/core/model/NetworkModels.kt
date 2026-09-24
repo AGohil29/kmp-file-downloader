@@ -1,4 +1,4 @@
-package com.arun.downloader.network.model
+package com.arun.downloader.core.model
 
 import io.ktor.utils.io.ByteReadChannel
 

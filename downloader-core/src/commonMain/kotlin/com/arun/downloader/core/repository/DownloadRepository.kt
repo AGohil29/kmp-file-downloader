@@ -1,7 +1,8 @@
-package com.arun.downloader.storage.repository
+package com.arun.downloader.core.repository
 
 import com.arun.downloader.core.model.DownloadError
 import com.arun.downloader.core.model.DownloadId
+import com.arun.downloader.core.model.DownloadRecord
 import com.arun.downloader.core.model.DownloadRequest
 import kotlinx.coroutines.flow.Flow
 

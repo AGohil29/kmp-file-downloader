@@ -24,8 +24,4 @@ include(":downloader-core")
 include(":downloader-filesystem")
 include(":downloader-storage")
 include(":downloader-network")
-
-// Platform Runtimes
-include(":downloader-runtime-desktop")
-include(":downloader-runtime-android")
-include(":downloader-runtime-ios")
+include(":downloader-runtime")
