@@ -55,13 +55,63 @@ class DownloadTask(
             stateMachine.transition(DownloadStateEvent.AcquireSlot)
             repository.updateState(id, "CONNECTING", getEpochMs())
 
+            // Determine local partial file state
+            val localFileSize = if (fileSystem.exists(stagingPartFile)) {
+                fileSystem.size(stagingPartFile)
+            } else {
+                0L
+            }
+
+            val persistedRecord = repository.getById(id)
+            val storedEtag = persistedRecord?.etag
+            val storedLastModified = persistedRecord?.lastModified
+            val ifRange = storedEtag ?: storedLastModified
+
+            // Build HTTP request with Range headers if partial data exists
+            val requestRangeStart = if (localFileSize > 0L) localFileSize else null
+
             val netRequest = NetworkRequest(
                 url = request.url,
-                headers = request.headers
+                headers = request.headers,
+                rangeStart = requestRangeStart,
+                ifRange = if (requestRangeStart != null) ifRange else null
             )
 
             val netResponse = network.execute(netRequest)
-            val totalBytes = netResponse.contentLength
+            // Evaluate response against resumption requirements
+            val isResuming: Boolean
+            val totalBytes: Long?
+            var currentBytes: Long
+
+            if (netResponse.isPartialContent && requestRangeStart != null) {
+                // HTTP 206 Partial Content received
+                val contentRange = ContentRange.parseOrNull(netResponse.getHeader("Content-Range"))
+                val rangeMatches = contentRange != null && contentRange.rangeStart == localFileSize
+
+                if (rangeMatches) {
+                    isResuming = true
+                    currentBytes = localFileSize
+                    totalBytes = contentRange?.totalBytes ?: netResponse.contentLength?.let { it + localFileSize }
+                } else {
+                    // Invalid Content-Range: server returned unexpected slice. Reset and restart.
+                    fileSystem.delete(stagingPartFile)
+                    isResuming = false
+                    currentBytes = 0L
+                    totalBytes = netResponse.contentLength
+                }
+            } else {
+                // HTTP 200 OK: server ignored Range or file changed. Truncate local partial file.
+                if (localFileSize > 0L) {
+                    fileSystem.delete(stagingPartFile)
+                }
+                isResuming = false
+                currentBytes = 0L
+                totalBytes = netResponse.contentLength
+            }
+
+            // Update state machine and repository with negotiated headers
+            val etag = netResponse.etag ?: storedEtag
+            val lastModified = netResponse.lastModified ?: storedLastModified
 
             stateMachine.transition(
                 DownloadStateEvent.HeaderReceived(
@@ -79,9 +129,11 @@ class DownloadTask(
                 timestampEpochMs = getEpochMs()
             )
 
-            // Prepare sink and optional hashing sink
-            rawSink = fileSystem.sink(stagingPartFile, append = false)
-            val activeSink = if (request.expectedChecksum != null) {
+            // Open disk sink (Append if resuming, fresh sink if restarting)
+            rawSink = fileSystem.sink(stagingPartFile, append = isResuming)
+
+            // Checksums can only be computed in-stream on fresh downloads (not resuming slices)
+            val activeSink = if (request.expectedChecksum != null && !isResuming) {
                 hashingSink = createHashingSink(rawSink, request.expectedChecksum)
                 hashingSink
             } else {
@@ -89,10 +141,11 @@ class DownloadTask(
             }
             bufferedSink = activeSink.buffer()
 
-            // Stream byte pump
+            // Pump remaining stream bytes to disk
             pumpBytes(
                 channel = netResponse.bodyChannel,
                 sink = bufferedSink,
+                initialDownloadedBytes = currentBytes,
                 totalBytes = totalBytes
             )
 
@@ -101,7 +154,6 @@ class DownloadTask(
             // Verification & Finalization
             stateMachine.transition(DownloadStateEvent.StartValidation)
 
-            // Validate byte count
             val finalDiskSize = fileSystem.size(stagingPartFile)
             if (totalBytes != null && finalDiskSize != totalBytes) {
                 throw DownloadError.NonRetryable.HttpError(
@@ -127,7 +179,7 @@ class DownloadTask(
                 conflictStrategy = request.conflictStrategy
             )
 
-            // Close file handles prior to atomic move (Mandatory for Windows file-locking correctness)
+            // Close handles prior to atomic move
             bufferedSink.close()
             bufferedSink = null
             rawSink = null
@@ -166,10 +218,11 @@ class DownloadTask(
     private suspend fun pumpBytes(
         channel: ByteReadChannel,
         sink: okio.BufferedSink,
+        initialDownloadedBytes: Long,
         totalBytes: Long?
     ) {
         val buffer = ByteArray(bufferSize)
-        var totalBytesRead = 0L
+        var totalBytesRead = initialDownloadedBytes
         var lastEmittedTime = getEpochMs()
         var bytesSinceLastTick = 0L
 
@@ -200,6 +253,16 @@ class DownloadTask(
                 }
             }
         }
+
+        // Final progress flush
+        val finalNow = getEpochMs()
+        stateMachine.transition(
+            DownloadStateEvent.ProgressUpdate(
+                downloadedBytes = totalBytesRead,
+                speedBytesPerSecond = 0L
+            )
+        )
+        repository.updateProgress(id, totalBytesRead, finalNow)
     }
 
     private fun createHashingSink(sink: Sink, checksum: ChecksumValidation): HashingSink {
