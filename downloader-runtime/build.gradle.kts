@@ -15,6 +15,17 @@ kotlin {
         }
     }
 
+    listOf(
+        iosX64(),
+        iosArm64(),
+        iosSimulatorArm64()
+    ).forEach { iosTarget ->
+        iosTarget.binaries.framework {
+            baseName = "DownloaderRuntime"
+            isStatic = true
+        }
+    }
+
     sourceSets {
         commonMain.dependencies {
             implementation(project(":downloader-core"))
@@ -38,6 +49,12 @@ kotlin {
                 implementation(libs.findLibrary("androidx-work-runtime-ktx").get())
                 implementation(libs.findLibrary("sqldelight-driver-android").get())
                 implementation(libs.findLibrary("ktor-client-okhttp").get())
+            }
+        }
+
+        val iosMain by getting {
+            dependencies {
+                implementation(libs.findLibrary("sqldelight-driver-native").get())
             }
         }
 
