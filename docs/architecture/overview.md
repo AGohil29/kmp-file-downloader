@@ -17,7 +17,9 @@ kmp-file-downloader
 ├── downloader-network      (Ktor-based NetworkTransport implementation)
 ├── downloader-filesystem   (Okio-based DownloadFileSystem implementation)
 ├── downloader-storage      (SQLDelight-based DownloadRepository implementation)
-└── downloader-runtime      (multiplatform integration tests wiring core+network+filesystem+storage)
+├── downloader-runtime      (multiplatform integration tests wiring core+network+filesystem+storage)
+└── samples
+    └── sample-desktop      (Compose Desktop app for manual end-to-end testing)
 ```
 
 ### Dependency direction

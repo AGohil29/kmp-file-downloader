@@ -168,7 +168,7 @@ class DefaultFileDownloader(
     }
 
     private fun createDownloadTask(id: DownloadId, request: DownloadRequest): DownloadTask {
-        val initialState = DownloadState.Queued(id, request.priority, currentTimeEpochMs())
+        val initialState = DownloadState.Idle(id)
         val stateMachine = DownloadStateMachine(id, initialState)
         return DownloadTask(
             id = id,
