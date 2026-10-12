@@ -19,10 +19,13 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.time.TimeSource
@@ -38,6 +41,7 @@ class DefaultFileDownloader(
     private val scheduler = DownloadScheduler(config.maxConcurrentDownloads, scope)
     private val taskMutex = Mutex()
     private val activeTasks = mutableMapOf<DownloadId, DownloadTask>()
+    private val fallbackStateFlows = mutableMapOf<DownloadId, StateFlow<DownloadState>>()
 
     override suspend fun enqueue(request: DownloadRequest): DownloadId {
         val id = DownloadId.generate()
@@ -75,16 +79,19 @@ class DefaultFileDownloader(
             return activeTask.state
         }
 
-        // Reconstruct StateFlow from DB record for cold lookups
-        val fallbackFlow = MutableStateFlow<DownloadState>(DownloadState.Idle(id))
-        scope.launch {
-            repository.observeById(id).collect { record ->
-                if (record != null) {
-                    fallbackFlow.value = mapRecordToState(record)
-                }
-            }
+        return fallbackStateFlows.getOrPut(id) {
+            // Fetch current snapshot synchronously or fallback to Idle
+            val initialRecord = runBlocking { repository.getById(id) }
+            val initialState = initialRecord?.let { mapRecordToState(it) } ?: DownloadState.Idle(id)
+
+            repository.observeById(id)
+                .map { record -> record?.let { mapRecordToState(it) } ?: DownloadState.Idle(id) }
+                .stateIn(
+                    scope = scope,
+                    started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000L),
+                    initialValue = initialState
+                )
         }
-        return fallbackFlow.asStateFlow()
     }
 
     override fun observeAll(): Flow<List<DownloadState>> {
