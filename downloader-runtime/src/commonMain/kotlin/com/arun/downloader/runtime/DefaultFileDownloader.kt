@@ -158,6 +158,27 @@ class DefaultFileDownloader(
         repository.delete(id)
     }
 
+    override suspend fun pauseGroup(groupName: String) {
+        val records = repository.getByGroup(groupName)
+        records.forEach { record ->
+            pause(record.id)
+        }
+    }
+
+    override suspend fun resumeGroup(groupName: String) {
+        val records = repository.getByGroup(groupName)
+        records.forEach { record ->
+            resume(record.id)
+        }
+    }
+
+    override suspend fun cancelGroup(groupName: String) {
+        val records = repository.getByGroup(groupName)
+        records.forEach { record ->
+            cancel(record.id)
+        }
+    }
+
     override suspend fun shutdown() {
         scheduler.shutdown()
         taskMutex.withLock {

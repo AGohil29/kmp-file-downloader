@@ -15,6 +15,9 @@ interface FileDownloader {
     suspend fun cancel(id: DownloadId)
     suspend fun retry(id: DownloadId)
     suspend fun delete(id: DownloadId, deleteFiles: Boolean = true)
+    suspend fun pauseGroup(groupName: String)
+    suspend fun resumeGroup(groupName: String)
+    suspend fun cancelGroup(groupName: String)
     suspend fun shutdown()
 
     companion object

@@ -16,12 +16,13 @@ CREATE TABLE DownloadRecordEntity (
     error_type TEXT,
     error_message TEXT,
     created_at_epoch_ms INTEGER NOT NULL,
-    updated_at_epoch_ms INTEGER NOT NULL
+    updated_at_epoch_ms INTEGER NOT NULL,
+    download_group TEXT
 );
 
 CREATE INDEX idx_download_state ON DownloadRecordEntity(state);
-
 CREATE INDEX idx_download_priority ON DownloadRecordEntity(priority DESC, created_at_epoch_ms ASC);
+CREATE INDEX idx_download_record_group ON DownloadRecordEntity(download_group);
 
 insertOrReplaceRecord:
 INSERT OR REPLACE INTO DownloadRecordEntity(
@@ -39,7 +40,8 @@ INSERT OR REPLACE INTO DownloadRecordEntity(
     error_type,
     error_message,
     created_at_epoch_ms,
-    updated_at_epoch_ms
+    updated_at_epoch_ms,
+    download_group
 ) VALUES (
     :id,
     :url,
@@ -55,7 +57,8 @@ INSERT OR REPLACE INTO DownloadRecordEntity(
     :errorType,
     :errorMessage,
     :createdAtEpochMs,
-    :updatedAtEpochMs
+    :updatedAtEpochMs,
+    :downloadGroup
 );
 
 selectById:
@@ -111,10 +114,20 @@ reconcileStaleStatesOnStartup:
 UPDATE DownloadRecordEntity
 SET state = 'PAUSED',
     updated_at_epoch_ms = :reconciledAtEpochMs
-WHERE state IN ('CONNECTING', 'DOWNLOADING');
+WHERE state IN ('CONNECTING', 'DOWNLOADING', 'QUEUED');
 
 deleteById:
 DELETE FROM DownloadRecordEntity WHERE id = :id;
 
 clearAll:
 DELETE FROM DownloadRecordEntity;
+
+selectByGroup:
+SELECT * FROM DownloadRecordEntity
+WHERE download_group = :downloadGroup
+ORDER BY priority DESC, created_at_epoch_ms ASC;
+
+updateStateByGroup:
+UPDATE DownloadRecordEntity
+SET state = :state, updated_at_epoch_ms = :updatedAtEpochMs
+WHERE download_group = :downloadGroup AND state IN ('QUEUED', 'CONNECTING', 'DOWNLOADING', 'PAUSED');

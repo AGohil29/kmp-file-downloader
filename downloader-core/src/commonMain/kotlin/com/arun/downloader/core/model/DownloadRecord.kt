@@ -20,5 +20,6 @@ data class DownloadRecord(
     val errorType: String?,
     val errorMessage: String?,
     val createdAtEpochMs: Long,
-    val updatedAtEpochMs: Long
+    val updatedAtEpochMs: Long,
+    val group: String? = null
 )

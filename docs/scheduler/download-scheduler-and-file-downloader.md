@@ -465,6 +465,48 @@ override suspend fun delete(id: DownloadId, deleteFiles: Boolean) {
    `.downloader_staging/<id>.part` convention `DownloadTask` uses internally.
 3. Finally removes the database record entirely via `repository.delete(id)`.
 
+### Download groups
+
+A download can be tagged with an optional group name so related downloads (e.g. all files of one
+album or one update package) can be controlled together.
+
+**Model changes**
+
+- `DownloadRequest.group: String? = null` — set it when enqueuing. `null` means "ungrouped".
+- `DownloadRecord.group: String? = null` — the persisted value, read back from storage.
+- `DownloadRepository.getByGroup(groupName): List<DownloadRecord>` — new repository query.
+
+**Storage changes (`downloader-storage`)**
+
+- New nullable column `download_group TEXT` on `DownloadRecordEntity`, plus the index
+  `idx_download_record_group` for fast lookup. `insertOrReplaceRecord` writes it from
+  `request.group`, and `toDomain()` maps it back to `DownloadRecord.group`.
+- New queries: `selectByGroup` (ordered by priority DESC, then creation time ASC) and
+  `updateStateByGroup` (bulk state update for records in `QUEUED`, `CONNECTING`, `DOWNLOADING` or
+  `PAUSED`).
+- **Schema change:** this adds a column to an existing table. Installs with an existing database
+  need a SqlDelight migration; fresh installs and the in-memory test databases are unaffected.
+
+**Runtime behaviour (`DefaultFileDownloader`)**
+
+```kotlin
+override suspend fun pauseGroup(groupName: String) {
+    repository.getByGroup(groupName).forEach { pause(it.id) }
+}
+// resumeGroup -> resume(it.id), cancelGroup -> cancel(it.id)
+```
+
+Each group operation loads the group's records and delegates to the existing single-download
+`pause`/`resume`/`cancel`, so per-download semantics (scheduler removal, state machine
+transitions, resumable `.part` files) are identical. Group operations are not atomic: each
+download is handled in turn, and an unknown group name is a no-op.
+
+**Startup reconciliation change**
+
+`reconcileStaleStates` now also resets `QUEUED` records to `PAUSED` (previously only `CONNECTING`
+and `DOWNLOADING`). After a process restart the in-memory scheduler queue is empty, so a
+persisted `QUEUED` record would otherwise never run.
+
 ### `shutdown()`
 
 ```kotlin

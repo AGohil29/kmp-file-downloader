@@ -8,6 +8,7 @@ import com.arun.downloader.core.model.DownloadError
 import com.arun.downloader.core.model.DownloadId
 import com.arun.downloader.core.model.DownloadPriority
 import com.arun.downloader.core.model.DownloadRequest
+import com.arun.downloader.core.repository.DownloadRepository
 import com.arun.downloader.storage.db.DownloadDatabase
 import com.arun.downloader.storage.db.DownloadRecordEntity
 import io.kotest.matchers.nulls.shouldBeNull

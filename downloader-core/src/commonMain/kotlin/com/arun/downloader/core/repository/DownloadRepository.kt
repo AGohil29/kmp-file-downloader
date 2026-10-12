@@ -17,6 +17,8 @@ interface DownloadRepository {
 
     suspend fun getById(id: DownloadId): DownloadRecord?
 
+    suspend fun getByGroup(groupName: String): List<DownloadRecord>
+
     fun observeById(id: DownloadId): Flow<DownloadRecord?>
 
     fun observeAll(): Flow<List<DownloadRecord>>
