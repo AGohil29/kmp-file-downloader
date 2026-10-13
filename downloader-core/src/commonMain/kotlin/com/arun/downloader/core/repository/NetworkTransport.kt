@@ -5,8 +5,9 @@ import com.arun.downloader.core.model.NetworkResponse
 
 interface NetworkTransport {
     /**
-     * Executes the HTTP request and returns a streaming response.
-     * The caller is responsible for consuming or closing the underlying channel.
+     * Returns a streaming response as soon as headers are available, without buffering the body.
+     * The caller must invoke [NetworkResponse.close] in a finally block, even on cancellation
+     * or when failing before the body is read.
      */
     suspend fun execute(request: NetworkRequest): NetworkResponse
 

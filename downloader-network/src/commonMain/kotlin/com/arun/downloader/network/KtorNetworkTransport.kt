@@ -8,10 +8,13 @@ import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.request.headers
 import io.ktor.client.request.prepareRequest
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
+import io.ktor.utils.io.InternalAPI
+import kotlinx.coroutines.cancel
 import okio.IOException
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -19,6 +22,7 @@ class KtorNetworkTransport(
     private val client: HttpClient,
 ) : NetworkTransport {
     override suspend fun execute(request: NetworkRequest): NetworkResponse {
+        var openedResponse: HttpResponse? = null
         try {
             val statement = client.prepareRequest(request.url) {
                 method = HttpMethod.Get
@@ -37,7 +41,10 @@ class KtorNetworkTransport(
                 }
             }
 
-            val httpResponse = statement.execute()
+            // execute() saves the entire body. body<HttpResponse>() uses Ktor's streaming
+            // path and preserves the headers; ownership transfers to NetworkResponse.close().
+            val httpResponse = statement.body<HttpResponse>()
+            openedResponse = httpResponse
             val status = httpResponse.status.value
 
             // Error translation based on status code
@@ -61,19 +68,34 @@ class KtorNetworkTransport(
                 contentLength = contentLength,
                 isPartialContent = isPartial,
                 etag = etag,
-                lastModified = lastModified
+                lastModified = lastModified,
+                releaseResponse = { httpResponse.release() }
             )
         } catch (e: CancellationException) {
+            openedResponse?.release()
             throw e
         } catch (e: DownloadError) {
+            openedResponse?.release()
             throw e
         } catch (e: Exception) {
+            openedResponse?.release()
             throw mapNetworkException(e)
         }
     }
 
     override fun close() {
         client.close()
+    }
+
+    // bodyAsChannel() may wrap rawContent in a forwarding coroutine. Closing only the
+    // wrapper or response job can leave that coroutine waiting on the raw body.
+    @OptIn(InternalAPI::class)
+    private fun HttpResponse.release() {
+        try {
+            rawContent.cancel(null)
+        } finally {
+            cancel()
+        }
     }
 
     private fun mapAndThrowHttpError(statusCode: Int, retryAfterHeader: String?): Nothing {

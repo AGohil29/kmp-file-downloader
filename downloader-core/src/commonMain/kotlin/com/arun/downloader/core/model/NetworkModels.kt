@@ -17,8 +17,18 @@ data class NetworkResponse(
     val contentLength: Long?,
     val isPartialContent: Boolean,
     val etag: String?,
-    val lastModified: String?
+    val lastModified: String?,
+    private val releaseResponse: () -> Unit = {}
 ) {
+    /** Release the body and its network call, including when consumption stops early. */
+    fun close() {
+        try {
+            bodyChannel.cancel(null)
+        } finally {
+            releaseResponse()
+        }
+    }
+
     fun getHeader(name: String): String? =
         headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
 }

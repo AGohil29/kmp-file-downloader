@@ -62,6 +62,8 @@ kotlin {
             dependencies {
                 implementation(kotlin("test-junit"))
                 implementation(libs.findLibrary("sqldelight-driver-sqlite").get())
+                implementation(libs.findLibrary("ktor-client-cio").get())
+                implementation(libs.findLibrary("ktor-client-okhttp").get())
             }
         }
 

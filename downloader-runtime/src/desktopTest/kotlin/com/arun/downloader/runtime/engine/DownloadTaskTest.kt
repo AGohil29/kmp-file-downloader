@@ -13,6 +13,7 @@ import com.arun.downloader.core.model.DownloadRequest
 import com.arun.downloader.core.model.DownloadState
 import com.arun.downloader.core.model.NetworkRequest
 import com.arun.downloader.core.model.NetworkResponse
+import com.arun.downloader.core.repository.DownloadFileSystem
 import com.arun.downloader.core.repository.NetworkTransport
 import com.arun.downloader.core.statemachine.DownloadStateMachine
 import com.arun.downloader.filesystem.OkioDownloadFileSystem
@@ -27,6 +28,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import okio.Path.Companion.toPath
+import okio.IOException
+import okio.Path
+import okio.Sink
 import okio.fakefilesystem.FakeFileSystem
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -230,5 +234,51 @@ class DownloadTaskTest {
 
         task.state.value.shouldBeInstanceOf<DownloadState.Paused>()
         repository.getById(id)?.state shouldBe "PAUSED"
+        endlessChannel.isClosedForWrite shouldBe true
+    }
+
+    @Test
+    fun fileOpenFailureReleasesResponseBeforeBodyIsRead() = runTest(testDispatcher) {
+        val id = DownloadId("dl_open_failure")
+        val channel = ByteChannel(autoFlush = true)
+        var released = false
+        val network = object : NetworkTransport {
+            override suspend fun execute(request: NetworkRequest) = NetworkResponse(
+                statusCode = 200,
+                headers = emptyMap(),
+                bodyChannel = channel,
+                contentLength = 100L,
+                isPartialContent = false,
+                etag = null,
+                lastModified = null,
+                releaseResponse = { released = true }
+            )
+            override fun close() {}
+        }
+        val failingFileSystem = object : DownloadFileSystem by downloadFileSystem {
+            override fun sink(path: Path, append: Boolean): Sink = throw IOException("Disk unavailable")
+        }
+        val request = DownloadRequest(
+            url = "https://mock.com/file.bin",
+            destinationDirectory = baseDestinationDir,
+            fileName = "file.bin"
+        )
+        repository.insertOrUpdate(id, request, "QUEUED", 1000L, 1000L)
+        val task = DownloadTask(
+            id = id,
+            request = request,
+            stateMachine = DownloadStateMachine(id),
+            repository = repository,
+            network = network,
+            fileSystem = failingFileSystem,
+            stagingDirectory = baseStagingDir,
+            ioDispatcher = testDispatcher
+        )
+        task.execute()
+        task.state.value.shouldBeInstanceOf<DownloadState.Failed>()
+        repository.getById(id)?.state shouldBe "FAILED"
+        released shouldBe true
+        channel.isClosedForWrite shouldBe true
+        fakeFileSystem.exists(baseDestinationDir / "file.bin") shouldBe false
     }
 }

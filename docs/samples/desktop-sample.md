@@ -96,7 +96,10 @@ Notes:
 - Cloudflare's generated stream may not support HTTP `Range`, so *Resume* may restart from zero
   there. Use a static file host to test real resume; see
   [`http-range-resume.md`](../engine/http-range-resume.md).
-- Progress shows "Unknown" total when the server sends no `Content-Length`.
+- Progress shows "Unknown" total and an indeterminate bar when the server sends no
+  `Content-Length`; known totals use a determinate bar clamped to 0–100%.
+- Byte counts and speed update while the transfer is running (see
+  [`progress-streaming.md`](../testing/progress-streaming.md)).
 
 ## Gradle sync troubleshooting
 

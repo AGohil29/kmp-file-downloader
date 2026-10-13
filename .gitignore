@@ -18,3 +18,4 @@ build-logic/build
 local.properties
 .kotlin/
 samples/sample-desktop/build
+samples/sample-android/build

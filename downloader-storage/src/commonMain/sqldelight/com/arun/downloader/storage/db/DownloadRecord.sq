@@ -104,7 +104,7 @@ WHERE id = :id;
 markCompleted:
 UPDATE DownloadRecordEntity
 SET state = 'COMPLETED',
-    downloaded_bytes = total_bytes,
+    downloaded_bytes = COALESCE(total_bytes, downloaded_bytes),
     error_type = NULL,
     error_message = NULL,
     updated_at_epoch_ms = :updatedAtEpochMs

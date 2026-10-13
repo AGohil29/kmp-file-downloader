@@ -13,12 +13,58 @@ import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.writeFully
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
+import kotlin.time.Duration.Companion.seconds
 
 class KtorNetworkTransportTest {
+
+    @Test
+    fun firstBytesArriveBeforeServerFinishesBody() = runTest {
+        val releaseTail = CompletableDeferred<Unit>()
+        val channel = ByteChannel(autoFlush = true)
+        val producer = launch(Dispatchers.Default) {
+            channel.writeFully("first".encodeToByteArray())
+            releaseTail.await()
+            channel.writeFully("last".encodeToByteArray())
+            channel.close()
+        }
+        val transport = KtorNetworkTransport(HttpClient(MockEngine {
+            respond(channel, HttpStatusCode.OK, headersOf(HttpHeaders.ContentLength, "9"))
+        }))
+
+        try {
+            // Real-time timeout: the server is deliberately unable to finish until we read.
+            withContext(Dispatchers.Default) {
+                withTimeout(5.seconds) {
+                    val response = transport.execute(NetworkRequest("https://mock.com/gated"))
+                    try {
+                        response.contentLength shouldBe 9L
+                        val buffer = ByteArray(5)
+                        response.bodyChannel.readAvailable(buffer) shouldBe 5
+                        buffer.decodeToString() shouldBe "first"
+                        releaseTail.isCompleted shouldBe false
+                        releaseTail.complete(Unit)
+                        response.bodyChannel.readAvailable(buffer) shouldBe 4
+                        buffer.decodeToString(0, 4) shouldBe "last"
+                    } finally {
+                        response.close()
+                    }
+                }
+            }
+        } finally {
+            releaseTail.complete(Unit)
+            channel.cancel(null)
+            producer.cancelAndJoin()
+            transport.close()
+        }
+    }
 
     @Test
     fun streamingReadsChunksSequentiallyWithoutFullBuffer() = runTest {
@@ -46,22 +92,22 @@ class KtorNetworkTransportTest {
         val transport = KtorNetworkTransport(client)
 
         val response = transport.execute(NetworkRequest("https://mock.com/file.bin"))
-        response.contentLength shouldBe totalBytes.toLong()
-        response.etag shouldBe "\"mock-etag\""
-        response.isPartialContent shouldBe false
-
-        // Stream via 8 KB buffer to simulate disk writes
-        val buffer = ByteArray(8192)
-        var totalBytesRead = 0L
-
-        while (!response.bodyChannel.isClosedForRead) {
-            val read = response.bodyChannel.readAvailable(buffer, 0, buffer.size)
-            if (read <= 0) break
-            totalBytesRead += read
+        try {
+            response.contentLength shouldBe totalBytes.toLong()
+            response.etag shouldBe "\"mock-etag\""
+            response.isPartialContent shouldBe false
+            val buffer = ByteArray(8192)
+            var totalBytesRead = 0L
+            while (true) {
+                val read = response.bodyChannel.readAvailable(buffer, 0, buffer.size)
+                if (read == -1) break
+                totalBytesRead += read
+            }
+            totalBytesRead shouldBe totalBytes.toLong()
+        } finally {
+            response.close()
+            transport.close()
         }
-
-        totalBytesRead shouldBe totalBytes.toLong()
-        transport.close()
     }
 
     @Test
@@ -92,10 +138,14 @@ class KtorNetworkTransportTest {
             )
         )
 
-        response.statusCode shouldBe 206
-        response.isPartialContent shouldBe true
-        response.contentLength shouldBe 15L
-        transport.close()
+        try {
+            response.statusCode shouldBe 206
+            response.isPartialContent shouldBe true
+            response.contentLength shouldBe 15L
+        } finally {
+            response.close()
+            transport.close()
+        }
     }
 
     @Test
@@ -135,8 +185,10 @@ class KtorNetworkTransportTest {
     }
 
     @Test
-    fun coroutineCancellationClosesStreamGracefully() = runTest {
+    fun coroutineCancellationClosesStreamGracefully() = runTest(timeout = 10.seconds) {
         val channel = ByteChannel(autoFlush = true)
+        channel.writeFully(byteArrayOf(1))
+        val consumed = CompletableDeferred<Unit>()
         val mockEngine = MockEngine { _ ->
             respond(content = channel, status = HttpStatusCode.OK)
         }
@@ -145,15 +197,56 @@ class KtorNetworkTransportTest {
 
         val job = launch {
             val response = transport.execute(NetworkRequest("https://mock.com/infinite"))
-            val buffer = ByteArray(1024)
-            while (true) {
-                response.bodyChannel.readAvailable(buffer, 0, buffer.size)
+            try {
+                val buffer = ByteArray(1024)
+                response.bodyChannel.readAvailable(buffer) shouldBe 1
+                consumed.complete(Unit)
+                while (response.bodyChannel.readAvailable(buffer) != -1) { }
+            } finally {
+                response.close()
             }
         }
 
-        // Cancel mid-stream
-        job.cancelAndJoin()
-        job.isCancelled shouldBe true
-        transport.close()
+        try {
+            consumed.await()
+            job.cancelAndJoin()
+            job.isCancelled shouldBe true
+            channel.isClosedForWrite shouldBe true
+        } finally {
+            job.cancelAndJoin()
+            transport.close()
+        }
+    }
+
+    @Test
+    fun closingUnreadResponseClosesBody() = runTest(timeout = 10.seconds) {
+        val channel = ByteChannel(autoFlush = true)
+        val transport = KtorNetworkTransport(HttpClient(MockEngine {
+            respond(channel, HttpStatusCode.OK)
+        }))
+        try {
+            val response = transport.execute(NetworkRequest("https://mock.com/unread"))
+            response.close()
+            channel.isClosedForWrite shouldBe true
+        } finally {
+            channel.cancel(null)
+            transport.close()
+        }
+    }
+
+    @Test
+    fun httpErrorIsReportedWithoutWaitingForBody() = runTest(timeout = 10.seconds) {
+        val channel = ByteChannel(autoFlush = true)
+        val transport = KtorNetworkTransport(HttpClient(MockEngine {
+            respond(channel, HttpStatusCode.ServiceUnavailable)
+        }))
+        try {
+            shouldThrow<DownloadError.Retryable.ServerUnavailable> {
+                transport.execute(NetworkRequest("https://mock.com/error-with-open-body"))
+            }
+        } finally {
+            channel.cancel(null)
+            transport.close()
+        }
     }
 }

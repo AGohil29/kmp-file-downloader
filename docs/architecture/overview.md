@@ -19,7 +19,8 @@ kmp-file-downloader
 ├── downloader-storage      (SQLDelight-based DownloadRepository implementation)
 ├── downloader-runtime      (multiplatform integration tests wiring core+network+filesystem+storage)
 └── samples
-    └── sample-desktop      (Compose Desktop app for manual end-to-end testing)
+    ├── sample-desktop      (Compose Desktop app for manual end-to-end testing)
+    └── sample-android      (Compose Android app; see docs/samples/android-sample.md)
 ```
 
 ### Dependency direction

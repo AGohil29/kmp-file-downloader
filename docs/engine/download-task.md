@@ -43,12 +43,13 @@ suspend fun execute() = withContext(ioDispatcher) {
         repository.updateState(id, "CONNECTING", getEpochMs())
 
         val netResponse = network.execute(NetworkRequest(url = request.url, headers = request.headers))
+        response = netResponse   // released in finally via NetworkResponse.close()
 
         stateMachine.transition(DownloadStateEvent.HeaderReceived(...))
         repository.updateConnectionHeaders(...)
 
         // open staging sink (optionally wrapped in a HashingSink for checksum validation)
-        pumpBytes(channel = netResponse.bodyChannel, sink = bufferedSink, totalBytes = totalBytes)
+        pumpBytes(channel = netResponse.bodyChannel, sink = bufferedSink, initialDownloadedBytes = currentBytes)
         bufferedSink.flush()
 
         stateMachine.transition(DownloadStateEvent.StartValidation)
@@ -59,7 +60,9 @@ suspend fun execute() = withContext(ioDispatcher) {
         repository.markCompleted(id, completionTime)
     } catch (cancellation: CancellationException) { ... }
     catch (e: Throwable) { ... }
-    finally { closeQuietly(bufferedSink, rawSink) }
+    finally {
+        try { response?.close() } finally { closeQuietly(bufferedSink, rawSink) }
+    }
 }
 ```
 
@@ -73,6 +76,17 @@ suspend fun execute() = withContext(ioDispatcher) {
 4. Progress (`ProgressUpdate` events + `repository.updateProgress`) is throttled to at most once
    every `progressUpdateIntervalMs` (default 100ms) to avoid flooding the state flow / DB with
    writes for every chunk.
+
+### Streaming and response ownership
+
+- `network.execute` now returns as soon as headers arrive; the body is streamed, not buffered
+  (see [`downloader-network-module.md`](../networking/downloader-network-module.md)).
+- `DownloadTask` stores the `NetworkResponse` and calls `NetworkResponse.close()` in `finally`,
+  including on cancellation and when opening the disk sink fails.
+- `pumpBytes` loops until EOF (`readAvailable` returns -1) with `ensureActive()` on each
+  iteration. An `IOException` while reading is mapped to
+  `DownloadError.Retryable.ConnectionInterrupted`, so a truncated response fails the download
+  instead of committing a short file. The unused `totalBytes` parameter was removed.
 
 ## Bug #1 (fixed): missing `Enqueue` transition before `AcquireSlot`
 

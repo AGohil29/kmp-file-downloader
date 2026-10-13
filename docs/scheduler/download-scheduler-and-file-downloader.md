@@ -103,7 +103,7 @@ time. It centralizes the knobs that were previously scattered as constructor def
 `DownloadTask` and `NetworkClientFactory` (see
 [`docs/networking/downloader-network-module.md`](../networking/downloader-network-module.md)):
 
-- `maxConcurrentDownloads` seeds the `DownloadScheduler`'s semaphore permit count.
+- `maxConcurrentDownloads` seeds the `DownloadScheduler`'s concurrency limit (must be > 0).
 - `stagingDirectory` is the root directory `DownloadTask` uses for its `.downloader_staging`
   subfolder (also reused by `DefaultFileDownloader.delete` to locate a download's `.part` file).
 - `connectTimeoutMs`/`readTimeoutMs` mirror `NetworkClientFactory.createDefault`'s parameters,
@@ -173,120 +173,74 @@ class DownloadScheduler(
 ) {
     private val mutex = Mutex()
     private val queue = SchedulerQueue()
-    private val semaphore = Semaphore(initialMaxConcurrent)
+    private val pendingExecutors = mutableMapOf<DownloadId, suspend () -> Unit>()
     private val activeJobs = mutableMapOf<DownloadId, Job>()
     val activeCount: StateFlow<Int>
     ...
 }
 ```
 
-This is the coroutine-aware layer that actually runs queued work, bounded by a
-`kotlinx.coroutines.sync.Semaphore` sized to `maxConcurrent` permits.
+The coroutine-aware layer that runs queued work. Concurrency is bounded by comparing
+`activeJobs.size` with `maxConcurrent` under the mutex; there is no semaphore. Each queued id keeps
+**its own executor** in `pendingExecutors`, so a freed slot always runs the executor of the item
+actually dequeued (previously a different download's executor could be reused).
+`initialMaxConcurrent` and `updateMaxConcurrent` must be greater than zero.
 
 ### `enqueue(id, priority, createdAtEpochMs, executor)`
 
-```kotlin
-suspend fun enqueue(id, priority, createdAtEpochMs, executor: suspend () -> Unit) {
-    mutex.withLock {
-        if (activeJobs.containsKey(id) || queue.contains(id)) return
-        queue.enqueue(id, priority, createdAtEpochMs)
-    }
-    dispatchNext(executor)
-}
-```
+- Throws `IllegalStateException` if the scheduler has been shut down.
+- No-op if the `id` is already active or queued.
+- Stores the executor, adds the item to `SchedulerQueue`, then calls `dispatchLocked()`, all under
+  the mutex.
 
-- Guards against **duplicate enqueue**: if the same `id` is already running or already waiting in
-  the queue, the call is a no-op.
-- Adds the item to `SchedulerQueue` under the mutex, then calls `dispatchNext` to attempt to start
-  work immediately (which will block on the semaphore if all permits are currently held).
+### `dispatchLocked()` — the core dispatch loop
 
-### `dispatchNext(executor)` — the core dispatch loop
+Must be called with `mutex` held. While the scheduler is not closed and
+`activeJobs.size < maxConcurrent`, it polls the highest-priority item, takes its executor, and
+launches a job with `CoroutineStart.ATOMIC` (so the `finally` block runs even if the job is
+cancelled before its first dispatch). The job is registered in `activeJobs` before any other
+dispatcher can observe it, and `activeCount` is updated.
 
-```kotlin
-private fun dispatchNext(executor: suspend () -> Unit) {
-    scope.launch {
-        semaphore.acquire()
-
-        val nextItem = mutex.withLock {
-            val item = queue.pollNext()
-            if (item == null) { semaphore.release(); null } else item
-        } ?: return@launch
-
-        val id = nextItem.id
-        val job = launch {
-            try {
-                executor()
-            } finally {
-                mutex.withLock {
-                    activeJobs.remove(id)
-                    _activeCount.value = activeJobs.size
-                }
-                semaphore.release()
-                dispatchNext(executor)
-            }
-        }
-
-        mutex.withLock {
-            activeJobs[id] = job
-            _activeCount.value = activeJobs.size
-        }
-    }
-}
-```
-
-Each call launches a coroutine that:
-
-1. **Acquires a semaphore permit first** — this is what enforces the concurrency cap; if
-   `maxConcurrent` downloads are already running, this suspends until one finishes.
-2. Once a permit is held, pulls the next-highest-priority item off `queue`. If the queue is empty
-   (e.g. all pending items were already dispatched by other concurrent calls to `dispatchNext`),
-   it releases the permit it just took and exits — avoiding a permit leak.
-3. Launches a **child coroutine** to actually run `executor()` (the real download work, injected
-   by the caller — in `DefaultFileDownloader` this is `task.execute()`), tracking it in
-   `activeJobs` (so it can be cancelled later by id) and publishing the new `activeCount`.
-4. In the child job's `finally` block — guaranteed to run whether `executor()` completes normally,
-   throws, or is cancelled — it removes the job from `activeJobs`, releases the semaphore permit,
-   and **recursively calls `dispatchNext` again** to immediately try to pull the next queued item
-   into the now-freed slot. This recursive "pump" pattern means the scheduler doesn't need a
-   dedicated polling loop; each completed download hands off directly to the next one.
+When a job ends (success, failure or cancellation), its `finally` block runs in `NonCancellable`,
+removes the job from `activeJobs`, updates `activeCount` and calls `dispatchLocked()` again to fill
+the freed slot. No polling loop is needed.
 
 ### `cancel(id)` / `pause(id)`
 
 ```kotlin
-suspend fun cancel(id: DownloadId) = mutex.withLock {
-    queue.remove(id)
-    activeJobs.remove(id)?.cancel()
-    _activeCount.value = activeJobs.size
+suspend fun cancel(id: DownloadId) {
+    val job = mutex.withLock {
+        queue.remove(id)
+        pendingExecutors.remove(id)
+        activeJobs[id]?.also { it.cancel() }
+    }
+    // Never join under the mutex: the task's finally block needs it to release its slot.
+    job?.join()
 }
 
 suspend fun pause(id: DownloadId) = cancel(id)
 ```
 
-- `cancel` handles both cases uniformly: if the download hasn't started yet, it's simply removed
-  from the pending queue (never runs); if it's already running, its tracked `Job` is cancelled
-  (which propagates a `CancellationException` into the running `executor()` — see
-  `DownloadTask`'s `NonCancellable` cleanup handling in
-  [`docs/engine/download-task.md`](../engine/download-task.md)).
-- **`pause` is currently implemented as a plain alias for `cancel`** at the scheduler level — the
-  scheduler itself has no concept of "paused vs. cancelled," it only knows "stop this job and/or
-  remove it from the queue." The distinction between pause and cancel is applied one layer up, in
-  `DefaultFileDownloader` (see below), which persists a different terminal repository state
-  (`"PAUSED"` vs `"CANCELLED"`) depending on which public method the caller invoked.
+- A queued download is removed and never runs; a running one is cancelled.
+- **`cancel` now waits for the job to finish cleanup** (outside the mutex). Previously it returned
+  immediately, so a late `Paused` write could overwrite `Cancelled`.
+- `pause` is still an alias for `cancel` at the scheduler level; the pause/cancel distinction is
+  applied in `DefaultFileDownloader` (persisted `"PAUSED"` vs `"CANCELLED"`).
 
 ### `updateMaxConcurrent(newMax)` and `shutdown()`
 
-- `updateMaxConcurrent` allows changing the concurrency cap at runtime. Since
-  `kotlinx.coroutines.sync.Semaphore` has no API to shrink its permit count, this only handles
-  **increasing** the limit (by releasing `diff` extra permits when `newMax > maxConcurrent`);
-  decreasing the limit is accepted (the tracked `maxConcurrent` field is updated) but takes effect
-  gradually as in-flight downloads finish and stop releasing surplus permits, rather than
-  immediately cancelling running downloads to shrink capacity.
-- `shutdown()` clears the pending queue and cancels every currently active `Job`, resetting
-  `activeCount` to zero — used when the whole downloader is being torn down.
+- `updateMaxConcurrent` sets the new limit and calls `dispatchLocked()`. Raising the limit starts
+  queued work immediately; lowering it takes effect as running downloads finish (running downloads
+  are not cancelled).
+- `shutdown()` marks the scheduler closed, clears the queue and pending executors, cancels all
+  active jobs and **waits for them to complete** (`joinAll`).
+
 
 ## `DownloadSchedulerTest.kt`
 
-Two tests validate the scheduler's two core responsibilities independently:
+Tests validate the scheduler's core responsibilities independently. Besides the two below,
+newer tests cover queued-executor identity (each id runs its own executor), priority order,
+cleanup ordering on cancel, and starting queued work when the limit is increased.
 
 - **`schedulerQueuePrioritizesHighPriorityAndFifoTieBreaks`** — tests `SchedulerQueue` directly
   (no coroutines): enqueues a `LOW`, `NORMAL`, `HIGH`, and a second `NORMAL` item with an
@@ -298,7 +252,7 @@ Two tests validate the scheduler's two core responsibilities independently:
   increment/decrement a shared `concurrentCount` counter around a `100ms` `delay`, tracking the
   highest concurrent value observed. After `advanceUntilIdle()`, asserts
   `maxObservedConcurrent shouldBe 2` (never exceeded the cap) and `scheduler.activeCount.value
-  shouldBe 0` (everything drained cleanly by the end) — confirming the semaphore-gated dispatch
+  shouldBe 0` (everything drained cleanly by the end) — confirming the dispatch
   loop correctly limits concurrency and eventually processes every queued item.
 
 ## `DefaultFileDownloader.kt` — wiring it all together
@@ -318,9 +272,9 @@ class DefaultFileDownloader(
 ```
 
 It owns a `DownloadScheduler` (sized from `config.maxConcurrentDownloads`) and a
-`taskMutex`-guarded `activeTasks: MutableMap<DownloadId, DownloadTask>` map tracking currently
-live `DownloadTask` instances (needed so `observe()` can return the *live* `StateFlow` for
-in-flight downloads rather than a reconstructed one).
+`activeTasks: MutableStateFlow<Map<DownloadId, DownloadTask>>` (updated under `taskMutex`)
+tracking currently live `DownloadTask` instances. Being a flow lets `observeAll()` react to tasks
+starting and finishing, and lets `observe()` return the *live* `StateFlow` for in-flight downloads.
 
 ### `enqueue(request)`
 
@@ -336,36 +290,21 @@ in-flight downloads rather than a reconstructed one).
 
 ### `observe(id)` — live vs. cold reconstruction
 
-```kotlin
-override fun observe(id: DownloadId): StateFlow<DownloadState> {
-    val activeTask = activeTasks[id]
-    if (activeTask != null) return activeTask.state
-
-    val fallbackFlow = MutableStateFlow<DownloadState>(DownloadState.Idle(id))
-    scope.launch {
-        repository.observeById(id).collect { record ->
-            if (record != null) fallbackFlow.value = mapRecordToState(record)
-        }
-    }
-    return fallbackFlow.asStateFlow()
-}
-```
-
-- If the download is currently active (in `activeTasks`), its real `DownloadTask.state`
-  `StateFlow` is returned directly — this is the live, low-latency path with every `ProgressUpdate`
-  reflected immediately.
-- Otherwise (app was restarted, or the download isn't running right now — e.g. it's `PAUSED`,
-  `COMPLETED`, or `FAILED`), a **fallback flow** is created, seeded with `DownloadState.Idle(id)`,
-  and a background collector subscribes to `repository.observeById(id)` (a reactive DB query) to
-  keep it updated by translating each `DownloadRecord` into a `DownloadState` via
-  `mapRecordToState`. This lets `observe()` work uniformly for both "downloading right now" and
-  "just reading historical/paused state from the database" callers.
+- If the download is active (in `activeTasks`), its real `DownloadTask.state` is returned directly.
+- Otherwise a cached `StateFlow` is built from `repository.observeById(id)` via
+  `stateIn(..., SharingStarted.WhileSubscribed(5_000))`, mapping each record through
+  `mapRecordToState`. The initial value is `DownloadState.Idle(id)`; the real state arrives
+  asynchronously. The earlier `runBlocking` snapshot was removed so callers (often the UI thread)
+  are never blocked on the database.
 
 ### `observeAll()`
 
-Simply maps every `DownloadRecord` emitted by `repository.observeAll()` through
-`mapRecordToState`, giving a reactive `Flow<List<DownloadState>>` snapshot of every known download
-— suitable for driving a downloads list screen.
+Combines `repository.observeAll()` with the live states of active tasks
+(`activeTasks.flatMapLatest { combine(task.state) }`). Persistence owns lifecycle state and byte
+counts; the only value overlaid from the live task is the transient `speedBytesPerSecond`, and only
+when both the persisted and live states are `Downloading`. A stale live state can therefore never
+resurrect a paused, completed or deleted record, and speeds no longer show as zero.
+
 
 ### `pause(id)` vs `cancel(id)`
 
@@ -373,12 +312,12 @@ Simply maps every `DownloadRecord` emitted by `repository.observeAll()` through
 override suspend fun pause(id: DownloadId) {
     scheduler.pause(id)
     repository.updateState(id, "PAUSED", currentTimeEpochMs())
-    taskMutex.withLock { activeTasks.remove(id) }
+    taskMutex.withLock { activeTasks.value = activeTasks.value - id }
 }
 
 override suspend fun cancel(id: DownloadId) {
     scheduler.cancel(id)
-    taskMutex.withLock { activeTasks.remove(id) }
+    taskMutex.withLock { activeTasks.value = activeTasks.value - id }
     repository.updateState(id, "CANCELLED", currentTimeEpochMs())
 }
 ```
@@ -409,9 +348,9 @@ override suspend fun resume(id: DownloadId) {
     )
 
     val task = createDownloadTask(id, request)
-    taskMutex.withLock { activeTasks[id] = task }
+    taskMutex.withLock { activeTasks.value = activeTasks.value + (id to task) }
     scheduler.enqueue(id, record.priority, now) {
-        try { task.execute() } finally { taskMutex.withLock { activeTasks.remove(id) } }
+        try { task.execute() } finally { taskMutex.withLock { activeTasks.value = activeTasks.value - id } }
     }
 }
 ```
@@ -484,8 +423,13 @@ album or one update package) can be controlled together.
 - New queries: `selectByGroup` (ordered by priority DESC, then creation time ASC) and
   `updateStateByGroup` (bulk state update for records in `QUEUED`, `CONNECTING`, `DOWNLOADING` or
   `PAUSED`).
-- **Schema change:** this adds a column to an existing table. Installs with an existing database
-  need a SqlDelight migration; fresh installs and the in-memory test databases are unaffected.
+- **Schema change:** this adds a column to an existing table. The desktop
+  `DatabaseDriverFactory` now runs `migrateLegacySchema` on an existing database file: it reads
+  `PRAGMA table_info(DownloadRecordEntity)`, creates the schema if the table is missing, and
+  otherwise adds `download_group` plus `idx_download_record_group` if absent. Fresh installs and
+  in-memory test databases are unaffected; other platforms still need their own migration.
+- `markCompleted` now sets `downloaded_bytes = COALESCE(total_bytes, downloaded_bytes)`, so
+  unknown-length downloads keep their actual transferred byte count instead of writing null.
 
 **Runtime behaviour (`DefaultFileDownloader`)**
 
@@ -512,7 +456,7 @@ persisted `QUEUED` record would otherwise never run.
 ```kotlin
 override suspend fun shutdown() {
     scheduler.shutdown()
-    taskMutex.withLock { activeTasks.clear() }
+    taskMutex.withLock { activeTasks.value = emptyMap() }
     network.close()
     scope.cancel()
 }
@@ -523,7 +467,8 @@ map, closes the shared `NetworkTransport` (releasing the underlying HTTP client/
 see `KtorNetworkTransport.close()` in
 [`docs/networking/downloader-network-module.md`](../networking/downloader-network-module.md)),
 and finally cancels the downloader's own `CoroutineScope` so any remaining background collectors
-(e.g. from `observe()`'s fallback flows) stop.
+(e.g. from `observe()`'s fallback flows) stop. `scheduler.shutdown()` now waits for active jobs to
+finish cleanup before the rest of the teardown runs.
 
 ### `createDownloadTask` / `mapRecordToState` (private helpers)
 

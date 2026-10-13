@@ -15,17 +15,18 @@ import com.arun.downloader.core.scheduler.DownloadScheduler
 import com.arun.downloader.core.statemachine.DownloadStateMachine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.time.TimeSource
@@ -40,7 +41,7 @@ class DefaultFileDownloader(
 
     private val scheduler = DownloadScheduler(config.maxConcurrentDownloads, scope)
     private val taskMutex = Mutex()
-    private val activeTasks = mutableMapOf<DownloadId, DownloadTask>()
+    private val activeTasks = MutableStateFlow<Map<DownloadId, DownloadTask>>(emptyMap())
     private val fallbackStateFlows = mutableMapOf<DownloadId, StateFlow<DownloadState>>()
 
     override suspend fun enqueue(request: DownloadRequest): DownloadId {
@@ -57,7 +58,7 @@ class DefaultFileDownloader(
 
         val task = createDownloadTask(id, request)
         taskMutex.withLock {
-            activeTasks[id] = task
+            activeTasks.value = activeTasks.value + (id to task)
         }
 
         scheduler.enqueue(id, request.priority, now) {
@@ -65,7 +66,7 @@ class DefaultFileDownloader(
                 task.execute()
             } finally {
                 taskMutex.withLock {
-                    activeTasks.remove(id)
+                    activeTasks.value = activeTasks.value - id
                 }
             }
         }
@@ -74,29 +75,44 @@ class DefaultFileDownloader(
     }
 
     override fun observe(id: DownloadId): StateFlow<DownloadState> {
-        val activeTask = activeTasks[id]
+        val activeTask = activeTasks.value[id]
         if (activeTask != null) {
             return activeTask.state
         }
 
         return fallbackStateFlows.getOrPut(id) {
-            // Fetch current snapshot synchronously or fallback to Idle
-            val initialRecord = runBlocking { repository.getById(id) }
-            val initialState = initialRecord?.let { mapRecordToState(it) } ?: DownloadState.Idle(id)
-
+            // Never block the caller (often the UI thread) waiting for database dispatch.
             repository.observeById(id)
                 .map { record -> record?.let { mapRecordToState(it) } ?: DownloadState.Idle(id) }
                 .stateIn(
                     scope = scope,
                     started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000L),
-                    initialValue = initialState
+                    initialValue = DownloadState.Idle(id)
                 )
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     override fun observeAll(): Flow<List<DownloadState>> {
-        return repository.observeAll().map { records ->
-            records.map { mapRecordToState(it) }
+        val liveStates = activeTasks.flatMapLatest { tasks ->
+            if (tasks.isEmpty()) {
+                flowOf(emptyMap<DownloadId, DownloadState>())
+            } else {
+                combine(tasks.values.map { it.state }) { states -> states.associateBy { it.id } }
+            }
+        }
+        return combine(repository.observeAll(), liveStates) { records, live ->
+            records.map { record ->
+                val persisted = mapRecordToState(record)
+                val current = live[record.id]
+                // Persistence owns lifecycle and byte counts. Only overlay transient speed;
+                // a stale live state must never resurrect a paused/completed/deleted record.
+                if (persisted is DownloadState.Downloading && current is DownloadState.Downloading) {
+                    persisted.copy(speedBytesPerSecond = current.speedBytesPerSecond)
+                } else {
+                    persisted
+                }
+            }
         }
     }
 
@@ -104,7 +120,7 @@ class DefaultFileDownloader(
         scheduler.pause(id)
         repository.updateState(id, "PAUSED", currentTimeEpochMs())
         taskMutex.withLock {
-            activeTasks.remove(id)
+            activeTasks.value = activeTasks.value - id
         }
     }
 
@@ -125,7 +141,7 @@ class DefaultFileDownloader(
 
         val task = createDownloadTask(id, request)
         taskMutex.withLock {
-            activeTasks[id] = task
+            activeTasks.value = activeTasks.value + (id to task)
         }
 
         scheduler.enqueue(id, record.priority, now) {
@@ -133,7 +149,7 @@ class DefaultFileDownloader(
                 task.execute()
             } finally {
                 taskMutex.withLock {
-                    activeTasks.remove(id)
+                    activeTasks.value = activeTasks.value - id
                 }
             }
         }
@@ -142,7 +158,7 @@ class DefaultFileDownloader(
     override suspend fun cancel(id: DownloadId) {
         scheduler.cancel(id)
         taskMutex.withLock {
-            activeTasks.remove(id)
+            activeTasks.value = activeTasks.value - id
         }
         repository.updateState(id, "CANCELLED", currentTimeEpochMs())
     }
@@ -189,7 +205,7 @@ class DefaultFileDownloader(
     override suspend fun shutdown() {
         scheduler.shutdown()
         taskMutex.withLock {
-            activeTasks.clear()
+            activeTasks.value = emptyMap()
         }
         network.close()
         scope.cancel()

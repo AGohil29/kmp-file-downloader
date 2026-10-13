@@ -6,6 +6,7 @@ import com.arun.downloader.core.model.DownloadId
 import com.arun.downloader.core.model.DownloadRequest
 import com.arun.downloader.core.model.DownloadState
 import com.arun.downloader.core.model.NetworkRequest
+import com.arun.downloader.core.model.NetworkResponse
 import com.arun.downloader.core.repository.DownloadFileSystem
 import com.arun.downloader.core.repository.DownloadRepository
 import com.arun.downloader.core.repository.NetworkTransport
@@ -18,10 +19,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okio.Closeable
 import okio.HashingSink
+import okio.IOException
 import okio.Path
 import okio.Sink
 import okio.buffer
@@ -45,6 +47,7 @@ class DownloadTask(
         var rawSink: Sink? = null
         var hashingSink: HashingSink? = null
         var bufferedSink: okio.BufferedSink? = null
+        var response: NetworkResponse? = null
 
         val stagingDir = stagingDirectory / ".downloader_staging"
         fileSystem.createDirectories(stagingDir)
@@ -78,6 +81,7 @@ class DownloadTask(
             )
 
             val netResponse = network.execute(netRequest)
+            response = netResponse
             // Evaluate response against resumption requirements
             val isResuming: Boolean
             val totalBytes: Long?
@@ -91,7 +95,7 @@ class DownloadTask(
                 if (rangeMatches) {
                     isResuming = true
                     currentBytes = localFileSize
-                    totalBytes = contentRange?.totalBytes ?: netResponse.contentLength?.let { it + localFileSize }
+                    totalBytes = contentRange.totalBytes ?: netResponse.contentLength?.let { it + localFileSize }
                 } else {
                     // Invalid Content-Range: server returned unexpected slice. Reset and restart.
                     fileSystem.delete(stagingPartFile)
@@ -110,9 +114,6 @@ class DownloadTask(
             }
 
             // Update state machine and repository with negotiated headers
-            val etag = netResponse.etag ?: storedEtag
-            val lastModified = netResponse.lastModified ?: storedLastModified
-
             stateMachine.transition(
                 DownloadStateEvent.HeaderReceived(
                     totalBytes = totalBytes,
@@ -145,8 +146,7 @@ class DownloadTask(
             pumpBytes(
                 channel = netResponse.bodyChannel,
                 sink = bufferedSink,
-                initialDownloadedBytes = currentBytes,
-                totalBytes = totalBytes
+                initialDownloadedBytes = currentBytes
             )
 
             bufferedSink.flush()
@@ -211,23 +211,31 @@ class DownloadTask(
             stateMachine.transition(DownloadStateEvent.Fail(downloadError, canRetry))
             repository.markFailed(id, downloadError, getEpochMs())
         } finally {
-            closeQuietly(bufferedSink, rawSink)
+            try {
+                response?.close()
+            } finally {
+                closeQuietly(bufferedSink, rawSink)
+            }
         }
     }
 
     private suspend fun pumpBytes(
         channel: ByteReadChannel,
         sink: okio.BufferedSink,
-        initialDownloadedBytes: Long,
-        totalBytes: Long?
+        initialDownloadedBytes: Long
     ) {
         val buffer = ByteArray(bufferSize)
         var totalBytesRead = initialDownloadedBytes
         var lastEmittedTime = getEpochMs()
         var bytesSinceLastTick = 0L
 
-        while (currentCoroutineContext().isActive && !channel.isClosedForRead) {
-            val bytesRead = channel.readAvailable(buffer, 0, buffer.size)
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val bytesRead = try {
+                channel.readAvailable(buffer, 0, buffer.size)
+            } catch (e: IOException) {
+                throw DownloadError.Retryable.ConnectionInterrupted(e.message ?: "Response stream interrupted", e)
+            }
             if (bytesRead == -1) break
             if (bytesRead > 0) {
                 sink.write(buffer, 0, bytesRead)

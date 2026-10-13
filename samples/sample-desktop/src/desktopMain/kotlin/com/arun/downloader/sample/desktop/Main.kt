@@ -22,6 +22,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,7 +55,7 @@ import kotlinx.coroutines.launch
 import okio.Path.Companion.toPath
 import java.io.File
 
-fun main() = application {
+fun main() {
     // Resolve Desktop System Directories
     val downloadDir = DesktopPathResolver.getDefaultDownloadDirectory()
     val dbDirectoryPath = DesktopPathResolver.getDefaultDatabaseDirectory()
@@ -63,12 +64,7 @@ fun main() = application {
     val dbFile = File(dbDir, "downloader_sample.db")
 
     // Initialize Storage Engine via SQLite JDBC
-    val driver = JdbcSqliteDriver("jdbc:sqlite:${dbFile.absolutePath}")
-    try {
-        DownloadDatabase.Schema.create(driver)
-    } catch (_: Exception) {
-        // Schema already created in previous sessions
-    }
+    val driver = com.arun.downloader.storage.db.DatabaseDriverFactory(dbFile).createDriver()
 
     val database = DownloadDatabase(
         driver = driver,
@@ -109,14 +105,20 @@ fun main() = application {
 
     // Register Cooperative JVM Shutdown Hook
     DesktopShutdownHook.register {
-        downloader.shutdown()
+        try {
+            downloader.shutdown()
+        } finally {
+            driver.close()
+        }
     }
 
-    Window(
-        onCloseRequest = ::exitApplication,
-        title = "KMP File Downloader - Desktop Sample"
-    ) {
-        App(downloader, downloadDir.toString())
+    application {
+        Window(
+            onCloseRequest = ::exitApplication,
+            title = "KMP File Downloader - Desktop Sample"
+        ) {
+            App(downloader, downloadDir.toString())
+        }
     }
 }
 
@@ -127,9 +129,9 @@ fun App(downloader: FileDownloader, defaultDownloadPath: String) {
     var fileNameInput by remember { mutableStateOf("sample_100mb.zip") }
     var downloads by remember { mutableStateOf<List<DownloadState>>(emptyList()) }
 
-    val scope = remember { CoroutineScope(Dispatchers.Default) }
+    val scope = rememberCoroutineScope()
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(downloader) {
         downloader.observeAll().collect { states ->
             downloads = states
         }
@@ -245,14 +247,15 @@ fun DownloadItemCard(
 
             when (state) {
                 is DownloadState.Downloading -> {
-                    val progress = state.totalBytes?.let { total ->
-                        if (total > 0) (state.downloadedBytes.toFloat() / total) else 0f
-                    } ?: 0f
-
-                    LinearProgressIndicator(
-                        progress = progress,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    val total = state.totalBytes
+                    if (total != null && total > 0) {
+                        LinearProgressIndicator(
+                            progress = (state.downloadedBytes.toFloat() / total).coerceIn(0f, 1f),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
                     Text(
                         "Downloaded: ${state.downloadedBytes} / ${state.totalBytes ?: "Unknown"} bytes | " +
                                 "Speed: ${state.speedBytesPerSecond / 1024} KB/s"
@@ -267,9 +270,17 @@ fun DownloadItemCard(
                 is DownloadState.Failed -> {
                     Text("Error: ${state.error.message ?: "Download failed"}", color = Color.Red)
                 }
-                else -> {
-                    Text("Waiting in queue...")
+                is DownloadState.Connecting -> {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text("Connecting to server...")
                 }
+                is DownloadState.Validating -> {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text("Validating download...")
+                }
+                is DownloadState.Queued -> Text("Waiting in queue...")
+                is DownloadState.Cancelled -> Text("Cancelled")
+                is DownloadState.Idle -> Text("Ready")
             }
 
             Row(

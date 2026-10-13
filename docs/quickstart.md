@@ -63,7 +63,8 @@ val downloader: FileDownloader = DefaultFileDownloader(
 ```
 
 `DatabaseDriverFactory()` with no file uses an in-memory database (history is lost on exit).
-A complete app is in [samples/desktop-sample.md](samples/desktop-sample.md).
+Complete apps are in [samples/desktop-sample.md](samples/desktop-sample.md) and
+[samples/android-sample.md](samples/android-sample.md).
 
 ### Android
 
