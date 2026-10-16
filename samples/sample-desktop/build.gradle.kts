@@ -18,10 +18,8 @@ kotlin {
     sourceSets {
         val desktopMain by getting {
             dependencies {
+                implementation(project(":samples:sample-common"))
                 implementation(project(":downloader-core"))
-                implementation(project(":downloader-filesystem"))
-                implementation(project(":downloader-storage"))
-                implementation(project(":downloader-network"))
                 implementation(project(":downloader-runtime"))
                 implementation(libs.findLibrary("okio").get())
                 implementation(compose.desktop.currentOs)
@@ -42,7 +40,7 @@ compose.desktop {
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi,
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb
             )
-            packageName = "KmpFileDownloaderSample"
+            packageName = "com.arun.downloader.sample.desktop"
             packageVersion = "1.0.0"
         }
     }

@@ -31,6 +31,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":samples:sample-common"))
     implementation(project(":downloader-core"))
     implementation(project(":downloader-filesystem"))
     implementation(project(":downloader-storage"))
