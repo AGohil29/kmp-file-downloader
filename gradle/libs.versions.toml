@@ -12,6 +12,7 @@ androidx-core = "1.15.0"
 compose-multiplatform = "1.7.3"
 turbine = "1.2.0"
 kotest = "5.9.1"
+dokka = "1.9.20"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
@@ -56,6 +57,7 @@ kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotl
 gradlePlugin-kotlin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 gradlePlugin-android = { module = "com.android.tools.build:gradle", version.ref = "agp" }
 gradlePlugin-sqldelight = { module = "app.cash.sqldelight:gradle-plugin", version.ref = "sqldelight" }
+gradlePlugin-dokka = { module = "org.jetbrains.dokka:dokka-gradle-plugin", version.ref = "dokka" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
@@ -65,4 +67,5 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
 compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
 
