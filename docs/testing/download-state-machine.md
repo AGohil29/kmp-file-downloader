@@ -186,3 +186,9 @@ retrying.shouldBeInstanceOf<DownloadState.Connecting>()
 # or, for a single target, e.g.:
 ./gradlew :downloader-core:jvmTest --tests "com.arun.downloader.core.statemachine.DownloadStateMachineTest"
 ```
+
+## See also
+
+- [Cross-platform parity test](cross-platform-parity.md) — end-to-end `enqueue` → `Completed` check through the public `FileDownloader` facade.
+- [Chaos recovery tests](chaos-recovery.md) — cancellation of an in-flight stream and startup reconciliation of stale `DOWNLOADING` records.
+- [Performance benchmarks](performance-benchmarks.md) — streaming throughput and scheduler queue smoke benchmarks.

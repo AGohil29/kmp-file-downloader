@@ -5,7 +5,9 @@ import app.cash.sqldelight.coroutines.mapToList
 import app.cash.sqldelight.coroutines.mapToOneOrNull
 import com.arun.downloader.core.model.DownloadError
 import com.arun.downloader.core.model.DownloadId
+import com.arun.downloader.core.model.DownloadRecord
 import com.arun.downloader.core.model.DownloadRequest
+import com.arun.downloader.core.repository.DownloadRepository
 import com.arun.downloader.storage.db.DownloadDatabase
 import com.arun.downloader.storage.db.DownloadRecordEntity
 import kotlinx.coroutines.CoroutineDispatcher
@@ -44,12 +46,17 @@ class SqlDelightDownloadRepository(
             errorType = null,
             errorMessage = null,
             createdAtEpochMs = createdAtEpochMs,
-            updatedAtEpochMs = updatedAtEpochMs
+            updatedAtEpochMs = updatedAtEpochMs,
+            downloadGroup = request.group
         )
     }
 
     override suspend fun getById(id: DownloadId): DownloadRecord? = withContext(ioDispatcher) {
         queries.selectById(id.raw).executeAsOneOrNull()?.toDomain()
+    }
+
+    override suspend fun getByGroup(groupName: String): List<DownloadRecord> = withContext(ioDispatcher) {
+        queries.selectByGroup(groupName).executeAsList().map { it.toDomain() }
     }
 
     override fun observeById(id: DownloadId): Flow<DownloadRecord?> {
@@ -138,6 +145,7 @@ class SqlDelightDownloadRepository(
         errorType = error_type,
         errorMessage = error_message,
         createdAtEpochMs = created_at_epoch_ms,
-        updatedAtEpochMs = updated_at_epoch_ms
+        updatedAtEpochMs = updated_at_epoch_ms,
+        group = download_group
     )
 }

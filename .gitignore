@@ -17,3 +17,6 @@ build-logic/build
 .cxx
 local.properties
 .kotlin/
+samples/sample-desktop/build
+samples/sample-android/build
+samples/sample-common/build

@@ -1,4 +1,6 @@
 [versions]
+activity-compose = "1.9.3"
+compose-bom = "2024.10.00"
 kotlin = "2.1.10"
 coroutines = "1.10.1"
 okio = "3.10.2"
@@ -10,8 +12,14 @@ androidx-core = "1.15.0"
 compose-multiplatform = "1.7.3"
 turbine = "1.2.0"
 kotest = "5.9.1"
+dokka = "1.9.20"
 
 [libraries]
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }
+androidx-compose-material = { module = "androidx.compose.material:material" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+
 # Coroutines
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
@@ -37,7 +45,7 @@ sqldelight-driver-native = { module = "app.cash.sqldelight:native-driver", versi
 sqldelight-driver-sqlite = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }
 
 # Android Runtime
-androidx-workmanager = { module = "androidx.work:work-runtime-ktx", version.ref = "androidx-work" }
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "androidx-work" }
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
 
 # Testing
@@ -49,6 +57,7 @@ kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotl
 gradlePlugin-kotlin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 gradlePlugin-android = { module = "com.android.tools.build:gradle", version.ref = "agp" }
 gradlePlugin-sqldelight = { module = "app.cash.sqldelight:gradle-plugin", version.ref = "sqldelight" }
+gradlePlugin-dokka = { module = "org.jetbrains.dokka:dokka-gradle-plugin", version.ref = "dokka" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
@@ -58,4 +67,5 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
 compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
 

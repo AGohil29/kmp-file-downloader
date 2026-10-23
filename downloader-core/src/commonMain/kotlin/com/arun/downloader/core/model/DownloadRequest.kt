@@ -9,7 +9,8 @@ data class DownloadRequest(
     val priority: DownloadPriority = DownloadPriority.NORMAL,
     val headers: Map<String, String> = emptyMap(),
     val conflictStrategy: ConflictStrategy = ConflictStrategy.RENAME_NEW_INCREMENTAL,
-    val expectedChecksum: ChecksumValidation? = null
+    val expectedChecksum: ChecksumValidation? = null,
+    val group: String? = null
 ) {
     init {
         require(url.isNotBlank()) { "URL cannot be blank." }
