@@ -16,3 +16,4 @@ build-logic/build
 .externalNativeBuild
 .cxx
 local.properties
+.kotlin/
