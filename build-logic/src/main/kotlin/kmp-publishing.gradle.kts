@@ -88,8 +88,7 @@ signing {
     }
 }
 
-// Avoid task race conditions during publication
+// Shared javadoc jar is signed by every Sign task; publish tasks must depend on signing
 tasks.withType<AbstractPublishToMaven>().configureEach {
-    val signingTasks = tasks.withType<Sign>()
-    mustRunAfter(signingTasks)
+    dependsOn(tasks.withType<Sign>())
 }
