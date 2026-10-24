@@ -13,6 +13,7 @@ import com.arun.downloader.core.repository.DownloadRepository
 import com.arun.downloader.core.repository.NetworkTransport
 import com.arun.downloader.core.scheduler.DownloadScheduler
 import com.arun.downloader.core.statemachine.DownloadStateMachine
+import com.arun.downloader.core.time.EpochClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -29,7 +30,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlin.time.TimeSource
 
 class DefaultFileDownloader(
     private val config: DownloaderConfig,
@@ -261,6 +261,5 @@ class DefaultFileDownloader(
         }
     }
 
-    private fun currentTimeEpochMs(): Long =
-        TimeSource.Monotonic.markNow().elapsedNow().inWholeMilliseconds
+    private fun currentTimeEpochMs(): Long = EpochClock.nowEpochMs()
 }
