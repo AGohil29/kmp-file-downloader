@@ -57,7 +57,7 @@ suspend fun execute() = withContext(ioDispatcher) {
 
         fileSystem.atomicMove(stagingPartFile, finalDestinationPath)
         stateMachine.transition(DownloadStateEvent.Complete(...))
-        repository.markCompleted(id, completionTime)
+        repository.markCompleted(id, finalDestinationPath, completionTime)
     } catch (cancellation: CancellationException) { ... }
     catch (e: Throwable) { ... }
     finally {
@@ -214,5 +214,10 @@ target:
 | `androidMain` / `desktopMain` | `System.currentTimeMillis()`                        |
 | `iosMain`                     | `clock_gettime_nsec_np(CLOCK_REALTIME) / 1_000_000` |
 
-This keeps `DownloadTask` fully in `commonMain` while still getting a monotonic wall-clock value
+This keeps `DownloadTask` fully in `commonMain` while still getting a wall-clock epoch value
 per platform, without pulling in `kotlinx-datetime` for a single timestamp read.
+
+The same function is exposed to other modules as `com.arun.downloader.core.time.EpochClock`
+(`EpochClock.nowEpochMs()`). `DefaultFileDownloader` uses it for all persisted timestamps; it
+previously used a monotonic `TimeSource`, which produced values of about `0`.
+

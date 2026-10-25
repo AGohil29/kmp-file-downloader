@@ -48,5 +48,8 @@ actual class DatabaseDriverFactory(
                 0
             )
         }
+        if ("final_path" !in columns) {
+            driver.execute(null, "ALTER TABLE DownloadRecordEntity ADD COLUMN final_path TEXT", 0)
+        }
     }
 }

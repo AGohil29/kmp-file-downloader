@@ -480,12 +480,29 @@ finish cleanup before the rest of the teardown runs.
   `"COMPLETED"`, `"FAILED"`, `"CANCELLED"`) into the corresponding typed `DownloadState` sealed
   class instance, reconstructing whatever fields are available on the record (bytes, totals,
   etag/lastModified, error message) — any unrecognized state string falls back to
-  `DownloadState.Idle(id)`.
+  `DownloadState.Idle(id)`. For `Completed`, the path is `record.finalPath`; only legacy records
+  without it fall back to `destinationDirectory / (fileName ?: url.substringAfterLast('/'))`.
 
-> **Note (pre-existing, not part of this change's scope):** `currentTimeEpochMs()` in this file is
-> implemented as `TimeSource.Monotonic.markNow().elapsedNow().inWholeMilliseconds`, which returns
-> the elapsed time since the mark was just taken (effectively ~0), **not** a wall-clock epoch
-> timestamp — unlike `DownloadTask`'s own `getSystemClockEpochMs()` expect/actual (see
-> [`docs/engine/download-task.md`](../engine/download-task.md)), which correctly reads the
-> platform's real clock. This looks like a latent bug worth fixing in a follow-up, but is called
-> out here for visibility rather than fixed as part of documenting these changes.
+### Timestamps (`EpochClock`) — bug fixed
+
+`currentTimeEpochMs()` used to be
+`TimeSource.Monotonic.markNow().elapsedNow().inWholeMilliseconds`, which measures the time since a
+mark taken on the same line (≈ 0) instead of a wall-clock time. Every timestamp written by
+`DefaultFileDownloader` (`createdAtEpochMs`, `updatedAtEpochMs`, `Queued` enqueue time, scheduler
+ordering) was therefore about `0`.
+
+It now delegates to the shared `com.arun.downloader.core.time.EpochClock`:
+
+```kotlin
+object EpochClock {
+    fun nowEpochMs(): Long = getSystemClockEpochMs()
+}
+
+private fun currentTimeEpochMs(): Long = EpochClock.nowEpochMs()
+```
+
+`EpochClock` (in `downloader-core`) wraps the same platform `getSystemClockEpochMs()`
+expect/actual that `DownloadTask` uses (see
+[`docs/engine/download-task.md`](../engine/download-task.md#platform-clock-expectactual)), so the
+engine and runtime share one wall-clock source. Do not use a monotonic `TimeSource` for persisted
+timestamps. Covered by `downloader-runtime/src/desktopTest/.../TimestampEpochReproTest.kt`.

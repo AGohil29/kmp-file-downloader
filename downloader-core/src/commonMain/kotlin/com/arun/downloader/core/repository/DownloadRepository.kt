@@ -5,6 +5,7 @@ import com.arun.downloader.core.model.DownloadId
 import com.arun.downloader.core.model.DownloadRecord
 import com.arun.downloader.core.model.DownloadRequest
 import kotlinx.coroutines.flow.Flow
+import okio.Path
 
 interface DownloadRepository {
     suspend fun insertOrUpdate(
@@ -35,7 +36,7 @@ interface DownloadRepository {
 
     suspend fun updateProgress(id: DownloadId, downloadedBytes: Long, timestampEpochMs: Long)
 
-    suspend fun markCompleted(id: DownloadId, timestampEpochMs: Long)
+    suspend fun markCompleted(id: DownloadId, finalPath: Path, timestampEpochMs: Long)
 
     suspend fun markFailed(id: DownloadId, error: DownloadError, timestampEpochMs: Long)
 

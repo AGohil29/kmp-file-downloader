@@ -17,7 +17,8 @@ CREATE TABLE DownloadRecordEntity (
     error_message TEXT,
     created_at_epoch_ms INTEGER NOT NULL,
     updated_at_epoch_ms INTEGER NOT NULL,
-    download_group TEXT
+    download_group TEXT,
+    final_path TEXT
 );
 
 CREATE INDEX idx_download_state ON DownloadRecordEntity(state);
@@ -107,6 +108,7 @@ SET state = 'COMPLETED',
     downloaded_bytes = COALESCE(total_bytes, downloaded_bytes),
     error_type = NULL,
     error_message = NULL,
+    final_path = :finalPath,
     updated_at_epoch_ms = :updatedAtEpochMs
 WHERE id = :id;
 

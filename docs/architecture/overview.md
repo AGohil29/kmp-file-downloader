@@ -108,7 +108,7 @@ sequenceDiagram
     DownloadTask->>FS: atomicMove(staging -> destination)
     DownloadTask->>SM: transition(Complete)
     SM-->>DownloadTask: Completed
-    DownloadTask->>Repo: markCompleted(id)
+    DownloadTask->>Repo: markCompleted(id, finalPath)
     deactivate DownloadTask
 ```
 
@@ -166,7 +166,7 @@ Connecting`)** — states cannot be skipped.
 |----------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------|
 | `downloader-core`    | `DownloadStateMachine` transition rules (pure, no I/O)                                                                                                                      | `downloader-core/src/commonTest`     |
 | `downloader-network` | HTTP request/response mapping via `MockEngine` (no real network)                                                                                                            | `downloader-network/src/commonTest`  |
-| `downloader-storage` | SQLDelight queries against an in-memory SQLite DB                                                                                                                           | `downloader-storage/src/desktopTest` |
+| `downloader-storage` | SQLDelight queries against an in-memory SQLite DB; upgrade of a legacy on-disk DB (`DatabaseDriverFactoryMigrationTest`)                                                    | `downloader-storage/src/desktopTest` |
 | `downloader-runtime` | Full `DownloadTask` integration: real state machine + real repository (in-memory SQLite) + fake filesystem (`okio.fakefilesystem.FakeFileSystem`) + fake `NetworkTransport` | `downloader-runtime/src/desktopTest` |
 
 `downloader-runtime`'s tests are the only ones that exercise the complete, wired-together engine

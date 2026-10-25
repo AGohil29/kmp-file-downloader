@@ -98,11 +98,12 @@ class SqlDelightDownloadRepositoryTest {
             progressState.downloadedBytes shouldBe 25_000L
 
             // Complete
-            repository.markCompleted(id, 1300L)
+            repository.markCompleted(id, "/downloads/archive (1).zip".toPath(), 1300L)
             val completedState = awaitItem()
             completedState.shouldNotBeNull()
             completedState.state shouldBe "COMPLETED"
             completedState.downloadedBytes shouldBe 50_000L
+            completedState.finalPath shouldBe "/downloads/archive (1).zip".toPath()
 
             cancelAndIgnoreRemainingEvents()
         }

@@ -187,7 +187,7 @@ class IosBackgroundSessionBridge(
                         timestampEpochMs = now
                     )
                 )
-                repository.markCompleted(downloadId, now)
+                repository.markCompleted(downloadId, finalDestination, now)
             } catch (e: Throwable) {
                 val error = DownloadError.NonRetryable.Unknown(e.message ?: "Move error", e)
                 sm?.transition(DownloadStateEvent.Fail(error, canRetry = false))

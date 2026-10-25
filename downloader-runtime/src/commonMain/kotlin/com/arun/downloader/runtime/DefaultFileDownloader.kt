@@ -174,9 +174,7 @@ class DefaultFileDownloader(
             val partFile = config.stagingDirectory / ".downloader_staging" / "${id.raw}.part"
             fileSystem.delete(partFile)
 
-            val resolvedFileName = record.fileName ?: record.url.substringAfterLast('/')
-            val destinationFile = record.destinationDirectory / resolvedFileName
-            fileSystem.delete(destinationFile)
+            record.finalPath?.let { fileSystem.delete(it) }
         }
         repository.delete(id)
     }
@@ -228,8 +226,10 @@ class DefaultFileDownloader(
 
     private fun mapRecordToState(record: DownloadRecord): DownloadState {
         val id = record.id
-        val resolvedFileName = record.fileName ?: record.url.substringAfterLast('/')
-        val resolvedPath = (record.destinationDirectory / resolvedFileName).toString()
+        // Prefer the persisted committed path; fall back to the requested name only for legacy
+        // records completed before final_path was tracked.
+        val resolvedPath = record.finalPath?.toString()
+            ?: (record.destinationDirectory / (record.fileName ?: record.url.substringAfterLast('/'))).toString()
 
         return when (record.state) {
             "QUEUED" -> DownloadState.Queued(id, record.priority, record.createdAtEpochMs)

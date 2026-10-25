@@ -35,15 +35,15 @@ include(":samples:sample-desktop")
 
 ## Wiring (`main()`)
 
-| Step        | Implementation                                                                                                                                                                                                                                   |
-|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Directories | `DesktopPathResolver.getDefaultDownloadDirectory()` / `getDefaultDatabaseDirectory()`                                                                                                                                                            |
-| Storage     | `JdbcSqliteDriver("jdbc:sqlite:<dbDir>/downloader_sample.db")`, `DownloadDatabase.Schema.create` (ignored if it already exists), enum column adapters for `priority` and `conflict_strategy`, `SqlDelightDownloadRepository` on `Dispatchers.IO` |
-| Network     | Ktor `HttpClient(CIO)` with `HttpTimeout`, wrapped in `KtorNetworkTransport`                                                                                                                                                                     |
-| Filesystem  | `OkioDownloadFileSystem`                                                                                                                                                                                                                         |
-| Config      | `DownloaderConfig(maxConcurrentDownloads = 3, stagingDirectory = downloadDir)`                                                                                                                                                                   |
-| Facade      | `DefaultFileDownloader(config, repository, network, fileSystem)`                                                                                                                                                                                 |
-| Shutdown    | `DesktopShutdownHook.register { downloader.shutdown() }`                                                                                                                                                                                         |
+| Step        | Implementation                                                                                                                                                                                                              |
+|-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Directories | `DesktopPathResolver.getDefaultDownloadDirectory()` / `getDefaultDatabaseDirectory()`                                                                                                                                       |
+| Storage     | `createDownloadDatabase(DatabaseDriverFactory(<dbDir>/downloader_sample.db))` — creates the schema for a new file and upgrades an existing one (e.g. adds `final_path`); `SqlDelightDownloadRepository` on `Dispatchers.IO` |
+| Network     | Ktor `HttpClient(CIO)` with `HttpTimeout`, wrapped in `KtorNetworkTransport`                                                                                                                                                |
+| Filesystem  | `OkioDownloadFileSystem`                                                                                                                                                                                                    |
+| Config      | `DownloaderConfig(maxConcurrentDownloads = 3, stagingDirectory = downloadDir)`                                                                                                                                              |
+| Facade      | `DefaultFileDownloader(config, repository, network, fileSystem)`                                                                                                                                                            |
+| Shutdown    | `DesktopShutdownHook.register { downloader.shutdown() }`                                                                                                                                                                    |
 
 ### Timeouts
 
@@ -74,7 +74,9 @@ Large files need special timeout handling:
 | `Completed`           | saved path                                      | Delete                     |
 | `Failed`              | error message                                   | Retry, Delete              |
 
-Delete calls `downloader.delete(id, deleteFiles = true)`.
+Delete calls `downloader.delete(id, deleteFiles = true)`. The completed path and the file deleted
+are the persisted `finalPath`, so a renamed download (`name (1).ext`) is shown and removed
+correctly and the user's original `name.ext` is left alone.
 
 ## Test URLs
 

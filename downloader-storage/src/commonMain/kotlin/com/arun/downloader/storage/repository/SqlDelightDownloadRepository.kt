@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import okio.Path
 import okio.Path.Companion.toPath
 
 class SqlDelightDownloadRepository(
@@ -103,9 +104,9 @@ class SqlDelightDownloadRepository(
             )
         }
 
-    override suspend fun markCompleted(id: DownloadId, timestampEpochMs: Long): Unit =
+    override suspend fun markCompleted(id: DownloadId, finalPath: Path, timestampEpochMs: Long): Unit =
         withContext(ioDispatcher) {
-            queries.markCompleted(updatedAtEpochMs = timestampEpochMs, id = id.raw)
+            queries.markCompleted(finalPath = finalPath.toString(), updatedAtEpochMs = timestampEpochMs, id = id.raw)
         }
 
     override suspend fun markFailed(id: DownloadId, error: DownloadError, timestampEpochMs: Long): Unit =
@@ -146,6 +147,7 @@ class SqlDelightDownloadRepository(
         errorMessage = error_message,
         createdAtEpochMs = created_at_epoch_ms,
         updatedAtEpochMs = updated_at_epoch_ms,
-        group = download_group
+        group = download_group,
+        finalPath = final_path?.toPath()
     )
 }

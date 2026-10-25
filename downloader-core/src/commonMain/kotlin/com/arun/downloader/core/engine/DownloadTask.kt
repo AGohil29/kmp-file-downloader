@@ -194,7 +194,7 @@ class DownloadTask(
                     timestampEpochMs = completionTime
                 )
             )
-            repository.markCompleted(id, completionTime)
+            repository.markCompleted(id, finalDestinationPath, completionTime)
         } catch (cancellation: CancellationException) {
             closeQuietly(bufferedSink, rawSink)
             withContext(NonCancellable) {
