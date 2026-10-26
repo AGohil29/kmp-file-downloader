@@ -131,12 +131,17 @@ class DefaultFileDownloader(
         val now = currentTimeEpochMs()
         repository.updateState(id, "QUEUED", now)
 
+        // Rebuild the *full* original request: dropping headers (auth) or the checksum here would
+        // make resumed/retried downloads fail auth or silently skip integrity validation.
         val request = DownloadRequest(
             url = record.url,
             destinationDirectory = record.destinationDirectory,
             fileName = record.fileName ?: record.url.substringAfterLast('/'),
             priority = record.priority,
-            conflictStrategy = record.conflictStrategy
+            headers = record.headers,
+            conflictStrategy = record.conflictStrategy,
+            expectedChecksum = record.expectedChecksum,
+            group = record.group
         )
 
         val task = createDownloadTask(id, request)

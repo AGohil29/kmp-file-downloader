@@ -18,7 +18,10 @@ CREATE TABLE DownloadRecordEntity (
     created_at_epoch_ms INTEGER NOT NULL,
     updated_at_epoch_ms INTEGER NOT NULL,
     download_group TEXT,
-    final_path TEXT
+    final_path TEXT,
+    request_headers TEXT,
+    checksum_algorithm TEXT,
+    checksum_hash TEXT
 );
 
 CREATE INDEX idx_download_state ON DownloadRecordEntity(state);
@@ -42,7 +45,10 @@ INSERT OR REPLACE INTO DownloadRecordEntity(
     error_message,
     created_at_epoch_ms,
     updated_at_epoch_ms,
-    download_group
+    download_group,
+    request_headers,
+    checksum_algorithm,
+    checksum_hash
 ) VALUES (
     :id,
     :url,
@@ -59,7 +65,10 @@ INSERT OR REPLACE INTO DownloadRecordEntity(
     :errorMessage,
     :createdAtEpochMs,
     :updatedAtEpochMs,
-    :downloadGroup
+    :downloadGroup,
+    :requestHeaders,
+    :checksumAlgorithm,
+    :checksumHash
 );
 
 selectById:

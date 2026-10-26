@@ -1,8 +1,10 @@
 # Android Sample (`samples:sample-android`)
 
 A Compose Android app that wires the library modules together with the Android SQLite driver and
-the Ktor OkHttp engine. It mirrors the [desktop sample](desktop-sample.md) UI: enqueue a URL, then
-pause, resume, retry and delete downloads from a live list.
+the Ktor OkHttp engine. It uses the shared `DownloadScreen` from `samples:sample-common`, so the UI
+matches the [desktop sample](desktop-sample.md): pick one of the preset sample URLs (videos, an
+image and a PDF — see [Sample URLs](desktop-sample.md#sample-urls)) or type your own, enqueue one
+or *Enqueue All Samples*, then pause, resume, retry and delete downloads from a live list.
 
 Source: `samples/sample-android/src/main/java/com/arun/downloader/sample/android/MainActivity.kt`
 

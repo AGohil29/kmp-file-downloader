@@ -21,12 +21,16 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import okio.ByteString
 import okio.Closeable
 import okio.HashingSink
+import okio.HashingSource
 import okio.IOException
 import okio.Path
 import okio.Sink
+import okio.blackholeSink
 import okio.buffer
+import okio.use
 import kotlin.coroutines.cancellation.CancellationException
 
 class DownloadTask(
@@ -150,6 +154,11 @@ class DownloadTask(
             )
 
             bufferedSink.flush()
+            // Release the write handle before validation so the staged file can be re-read
+            // (ranged-resume checksum) and later atomically moved.
+            bufferedSink.close()
+            bufferedSink = null
+            rawSink = null
 
             // Verification & Finalization
             stateMachine.transition(DownloadStateEvent.StartValidation)
@@ -162,10 +171,12 @@ class DownloadTask(
                 )
             }
 
-            // Validate Checksum if requested
-            if (hashingSink != null && request.expectedChecksum != null) {
-                val actualHash = hashingSink.hash.hex().lowercase()
-                val expectedHash = request.expectedChecksum.expectedHash.lowercase()
+            // Validate Checksum if requested. Fresh downloads are hashed in-stream; ranged resumes
+            // only streamed a tail slice, so hash the complete staged file instead.
+            request.expectedChecksum?.let { checksum ->
+                val actualHash = (hashingSink?.hash ?: hashFile(stagingPartFile, checksum.algorithm))
+                    .hex().lowercase()
+                val expectedHash = checksum.expectedHash.lowercase()
                 if (actualHash != expectedHash) {
                     throw DownloadError.NonRetryable.ChecksumMismatch(expectedHash, actualHash)
                 }
@@ -178,11 +189,6 @@ class DownloadTask(
                 baseName = finalFileName,
                 conflictStrategy = request.conflictStrategy
             )
-
-            // Close handles prior to atomic move
-            bufferedSink.close()
-            bufferedSink = null
-            rawSink = null
 
             fileSystem.atomicMove(stagingPartFile, finalDestinationPath)
 
@@ -279,6 +285,17 @@ class DownloadTask(
             ChecksumValidation.Algorithm.SHA1 -> HashingSink.sha1(sink)
             ChecksumValidation.Algorithm.SHA256 -> HashingSink.sha256(sink)
         }
+    }
+
+    private fun hashFile(path: Path, algorithm: ChecksumValidation.Algorithm): ByteString {
+        val raw = fileSystem.source(path)
+        val hashing = when (algorithm) {
+            ChecksumValidation.Algorithm.MD5 -> HashingSource.md5(raw)
+            ChecksumValidation.Algorithm.SHA1 -> HashingSource.sha1(raw)
+            ChecksumValidation.Algorithm.SHA256 -> HashingSource.sha256(raw)
+        }
+        hashing.buffer().use { it.readAll(blackholeSink()) }
+        return hashing.hash
     }
 
     private fun closeQuietly(vararg closeables: Closeable?) {

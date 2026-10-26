@@ -35,15 +35,15 @@ include(":samples:sample-desktop")
 
 ## Wiring (`main()`)
 
-| Step        | Implementation                                                                                                                                                                                                              |
-|-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Directories | `DesktopPathResolver.getDefaultDownloadDirectory()` / `getDefaultDatabaseDirectory()`                                                                                                                                       |
-| Storage     | `createDownloadDatabase(DatabaseDriverFactory(<dbDir>/downloader_sample.db))` — creates the schema for a new file and upgrades an existing one (e.g. adds `final_path`); `SqlDelightDownloadRepository` on `Dispatchers.IO` |
-| Network     | Ktor `HttpClient(CIO)` with `HttpTimeout`, wrapped in `KtorNetworkTransport`                                                                                                                                                |
-| Filesystem  | `OkioDownloadFileSystem`                                                                                                                                                                                                    |
-| Config      | `DownloaderConfig(maxConcurrentDownloads = 3, stagingDirectory = downloadDir)`                                                                                                                                              |
-| Facade      | `DefaultFileDownloader(config, repository, network, fileSystem)`                                                                                                                                                            |
-| Shutdown    | `DesktopShutdownHook.register { downloader.shutdown() }`                                                                                                                                                                    |
+| Step        | Implementation                                                                                                                                                                                                                                                                        |
+|-------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Directories | `DesktopPathResolver.getDefaultDownloadDirectory()` / `getDefaultDatabaseDirectory()`                                                                                                                                                                                                 |
+| Storage     | `createDownloadDatabase(DatabaseDriverFactory(<dbDir>/downloader_sample.db))` — creates the schema for a new file and upgrades an existing one (e.g. adds `final_path`, `request_headers`, `checksum_algorithm`, `checksum_hash`); `SqlDelightDownloadRepository` on `Dispatchers.IO` |
+| Network     | Ktor `HttpClient(CIO)` with `HttpTimeout`, wrapped in `KtorNetworkTransport`                                                                                                                                                                                                          |
+| Filesystem  | `OkioDownloadFileSystem`                                                                                                                                                                                                                                                              |
+| Config      | `DownloaderConfig(maxConcurrentDownloads = 3, stagingDirectory = downloadDir)`                                                                                                                                                                                                        |
+| Facade      | `DefaultFileDownloader(config, repository, network, fileSystem)`                                                                                                                                                                                                                      |
+| Shutdown    | `DesktopShutdownHook.register { downloader.shutdown() }`                                                                                                                                                                                                                              |
 
 ### Timeouts
 
@@ -56,11 +56,22 @@ Large files need special timeout handling:
 
 ## UI
 
-### `App`
+The UI is the shared `DownloadScreen` composable from `samples:sample-common`
+(`samples/sample-common/src/commonMain/kotlin/com/arun/downloader/sample/common/DownloadScreen.kt`),
+also used by the Android and iOS samples.
 
-- **Enqueue card**: URL field, file name field, destination label and a *Start Download* button.
-  The request is built with `DownloadPriority.HIGH` and
-  `ConflictStrategy.RENAME_NEW_INCREMENTAL` (a repeated file name becomes `name (1).ext`, etc.).
+### `DownloadScreen`
+
+- **Enqueue card**:
+  - a **Samples** row (`LazyRow`) of preset buttons — tapping one fills the URL and file name
+    fields (see [Sample URLs](#sample-urls));
+  - URL field, file name field and destination label;
+  - **Enqueue All Samples** — enqueues every preset at once;
+  - **Enqueue** — enqueues the current URL/file name.
+
+  Requests are built with `DownloadPriority.HIGH`, `ConflictStrategy.RENAME_NEW_INCREMENTAL`
+  (a repeated file name becomes `name (1).ext`, etc.) and group `"sample_app"`.
+- **Bulk toolbar**: *Pause All*, *Resume All*, *Cancel All* act on the `"sample_app"` group.
 - **Queue list**: a `LazyColumn` fed by `downloader.observeAll()`, collected in a
   `LaunchedEffect`.
 
@@ -78,26 +89,36 @@ Delete calls `downloader.delete(id, deleteFiles = true)`. The completed path and
 are the persisted `finalPath`, so a renamed download (`name (1).ext`) is shown and removed
 correctly and the user's original `name.ext` is left alone.
 
-## Test URLs
+## Sample URLs
 
-The default URL is a Cloudflare speed-test endpoint where the size is a query parameter:
+The presets are defined in `SAMPLE_DOWNLOADS` in `DownloadScreen.kt`; the form defaults to
+*Video 1*:
+
+| Preset  | URL                                                                                                  | File name            |
+|---------|------------------------------------------------------------------------------------------------------|----------------------|
+| Video 1 | `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4`                 | `Sample_Video_1.mp4` |
+| Video 2 | `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4`               | `Sample_Video_2.mp4` |
+| Video 3 | `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/SubaruOutbackOnStreetAndDirt.mp4` | `Sample_Video_3.mp4` |
+| Video 4 | `https://sample-videos.com/video321/mp4/720/big_buck_bunny_720p_30mb.mp4`                            | `Sample_Video_4.mp4` |
+| Image 1 | `https://picsum.photos/200/300`                                                                      | `Sample_Image_1.jpg` |
+| PDF 1   | `https://sample-videos.com/pdf/Sample-pdf-5mb.pdf`                                                   | `Sample_Pdf_1.pdf`   |
+
+Any other URL can still be typed in, e.g. a Cloudflare speed-test endpoint where the size is a
+query parameter:
 
 ```
-https://speed.cloudflare.com/__down?bytes=52428800   # 50 MB (default)
-https://speed.cloudflare.com/__down?bytes=10485760   # 10 MB
+https://speed.cloudflare.com/__down?bytes=52428800   # 50 MB
 https://speed.cloudflare.com/__down?bytes=104857600  # 100 MB
 ```
 
-Change the `bytes` value to get a larger file when you want progress and speed to stay visible
-longer. Other public hosts (e.g. `download.thinkbroadband.com/100MB.zip`,
-`ash-speed.hetzner.com/100MB.bin`) can be pasted into the URL field. These hosts come and go, so
-if one fails with a connection error, try another.
+Public hosts come and go, so if one fails with a connection error, try another.
 
 Notes:
 
-- Cloudflare's generated stream may not support HTTP `Range`, so *Resume* may restart from zero
-  there. Use a static file host to test real resume; see
-  [`http-range-resume.md`](../engine/http-range-resume.md).
+- The Google `gtv-videos-bucket` files are static and support HTTP `Range`, so they are good for
+  testing real pause/resume. `picsum.photos` redirects to a random image and is tiny, so it
+  completes almost instantly. Cloudflare's generated stream may not support `Range`, so *Resume*
+  may restart from zero there; see [`http-range-resume.md`](../engine/http-range-resume.md).
 - Progress shows "Unknown" total and an indeterminate bar when the server sends no
   `Content-Length`; known totals use a determinate bar clamped to 0–100%.
 - Byte counts and speed update while the transfer is running (see

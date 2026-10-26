@@ -51,5 +51,10 @@ actual class DatabaseDriverFactory(
         if ("final_path" !in columns) {
             driver.execute(null, "ALTER TABLE DownloadRecordEntity ADD COLUMN final_path TEXT", 0)
         }
+        for (column in listOf("request_headers", "checksum_algorithm", "checksum_hash")) {
+            if (column !in columns) {
+                driver.execute(null, "ALTER TABLE DownloadRecordEntity ADD COLUMN $column TEXT", 0)
+            }
+        }
     }
 }

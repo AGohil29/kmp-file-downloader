@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Button
@@ -48,17 +49,67 @@ import kotlinx.coroutines.launch
 
 private const val SAMPLE_GROUP = "sample_app"
 
+data class SampleDownload(val label: String, val url: String, val fileName: String)
+
+val SAMPLE_DOWNLOADS = listOf(
+    SampleDownload(
+        "Test 1mb",
+        "https://cdn.truefilesize.com/test/test-1mb.bin",
+        "Test_1_mb.bin"
+    ),
+    SampleDownload(
+        "Test 5mb",
+        "https://cdn.truefilesize.com/test/test-5mb.bin",
+        "Test_5_mb.bin"
+    ),
+    SampleDownload(
+        "Test 10mb",
+        "https://cdn.truefilesize.com/test/test-10mb.bin",
+        "Test_10_mb.bin"
+    ),
+    SampleDownload(
+        "Test 50mb",
+        "https://cdn.truefilesize.com/test/test-50mb.bin",
+        "Test_50_mb.bin"
+    ),
+    SampleDownload(
+        "Test 100mb",
+        "https://cdn.truefilesize.com/test/test-100mb.bin",
+        "Test_100_mb.bin"
+    ),
+    SampleDownload(
+        "Test 200mb",
+        "https://cdn.truefilesize.com/test/test-200mb.bin",
+        "Test_200_mb.bin"
+    )
+)
+
 @Composable
 fun DownloadScreen(
     downloader: FileDownloader,
     paths: PlatformPaths,
     modifier: Modifier = Modifier
 ) {
-    var urlInput by remember { mutableStateOf("https://speed.cloudflare.com/__down?bytes=10485760") } // 100 MB
-    var fileNameInput by remember { mutableStateOf("payload_10mb.bin") }
+    var urlInput by remember { mutableStateOf(SAMPLE_DOWNLOADS.first().url) }
+    var fileNameInput by remember { mutableStateOf(SAMPLE_DOWNLOADS.first().fileName) }
     var downloads by remember { mutableStateOf<List<DownloadState>>(emptyList()) }
 
     val scope = rememberCoroutineScope()
+
+    fun enqueue(url: String, fileName: String?) {
+        scope.launch {
+            downloader.enqueue(
+                DownloadRequest(
+                    url = url.trim(),
+                    destinationDirectory = paths.downloadDirectory,
+                    fileName = fileName?.takeIf { it.isNotBlank() },
+                    priority = DownloadPriority.HIGH,
+                    conflictStrategy = ConflictStrategy.RENAME_NEW_INCREMENTAL,
+                    group = SAMPLE_GROUP
+                )
+            )
+        }
+    }
 
     LaunchedEffect(downloader) {
         downloader.observeAll().collect { states ->
@@ -111,6 +162,24 @@ fun DownloadScreen(
                             style = MaterialTheme.typography.subtitle1.copy(fontWeight = FontWeight.Bold)
                         )
 
+                        Text(
+                            text = "Samples",
+                            style = MaterialTheme.typography.caption.copy(fontWeight = FontWeight.Bold)
+                        )
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            items(SAMPLE_DOWNLOADS) { sample ->
+                                OutlinedButton(
+                                    onClick = {
+                                        urlInput = sample.url
+                                        fileNameInput = sample.fileName
+                                    },
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(sample.label, fontSize = 12.sp)
+                                }
+                            }
+                        }
+
                         OutlinedTextField(
                             value = urlInput,
                             onValueChange = { urlInput = it },
@@ -136,23 +205,17 @@ fun DownloadScreen(
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                         ) {
+                            OutlinedButton(
+                                onClick = { SAMPLE_DOWNLOADS.forEach { enqueue(it.url, it.fileName) } },
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Enqueue All Samples")
+                            }
                             Button(
                                 onClick = {
-                                    if (urlInput.isNotBlank()) {
-                                        scope.launch {
-                                            val request = DownloadRequest(
-                                                url = urlInput.trim(),
-                                                destinationDirectory = paths.downloadDirectory,
-                                                fileName = fileNameInput.takeIf { it.isNotBlank() },
-                                                priority = DownloadPriority.HIGH,
-                                                conflictStrategy = ConflictStrategy.RENAME_NEW_INCREMENTAL,
-                                                group = SAMPLE_GROUP
-                                            )
-                                            downloader.enqueue(request)
-                                        }
-                                    }
+                                    if (urlInput.isNotBlank()) enqueue(urlInput, fileNameInput)
                                 },
                                 colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF2E7D32)),
                                 shape = RoundedCornerShape(8.dp)

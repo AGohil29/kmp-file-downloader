@@ -185,6 +185,11 @@ downloader.shutdown()                   // on app termination
 After a process restart, downloads that were queued or in flight come back as `Paused` and can
 be resumed.
 
+`resume()` and `retry()` replay the original request: its `headers` (e.g. auth tokens) and
+`expectedChecksum` are persisted with the download, so a resumed download is still authenticated
+and still checksum-validated (over the whole file, even after an HTTP 206 range resume). Headers
+are stored in plain text in the downloads database; protect it if they contain long-lived secrets.
+
 ---
 
 ## Next steps

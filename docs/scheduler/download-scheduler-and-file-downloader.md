@@ -344,7 +344,10 @@ override suspend fun resume(id: DownloadId) {
         destinationDirectory = record.destinationDirectory,
         fileName = record.fileName ?: record.url.substringAfterLast('/'),
         priority = record.priority,
-        conflictStrategy = record.conflictStrategy
+        headers = record.headers,
+        conflictStrategy = record.conflictStrategy,
+        expectedChecksum = record.expectedChecksum,
+        group = record.group
     )
 
     val task = createDownloadTask(id, request)
@@ -355,9 +358,11 @@ override suspend fun resume(id: DownloadId) {
 }
 ```
 
-- Reconstructs a `DownloadRequest` from the **persisted `DownloadRecord`** (not from any
+- Reconstructs the **full** `DownloadRequest` from the **persisted `DownloadRecord`** (not from any
   in-memory state — this is what allows resuming a download after an app restart, since nothing
-  about the original request needs to survive in memory).
+  about the original request needs to survive in memory). Every request field is restored:
+  `headers`, `expectedChecksum` and `group` included (see
+  [Persisted request data](#persisted-request-data-headers--checksum) below).
 - Guards against resuming a download that's already `COMPLETED` or currently `DOWNLOADING` (a
   no-op safety check to avoid double-starting a task).
 - Otherwise flips the record back to `"QUEUED"` and re-enqueues a fresh `DownloadTask` through the
@@ -377,6 +382,44 @@ override suspend fun retry(id: DownloadId) {
 Currently a direct alias for `resume` — a `FAILED` download is retried the same way a `PAUSED`
 one is resumed (both go through the same "reconstruct request from record, re-enqueue" path). No
 separate retry-specific logic (e.g. exponential backoff, retry-count limits) exists yet.
+
+### Persisted request data (headers & checksum)
+
+**Bug fixed.** `resume()`/`retry()` used to rebuild the request with only `url`,
+`destinationDirectory`, `fileName`, `priority` and `conflictStrategy`. `headers` and
+`expectedChecksum` were never persisted, so they silently fell back to their defaults
+(`emptyMap()` / `null`):
+
+- a resumed/retried download was sent **without auth headers** (e.g. `Authorization`) and could
+  fail authentication;
+- **checksum validation was skipped**, so a corrupt payload could be committed as `COMPLETED`.
+
+**Fix.**
+
+- `DownloadRecord` gained `headers: Map<String, String> = emptyMap()` and
+  `expectedChecksum: ChecksumValidation? = null`.
+- `DownloadRecordEntity` gained three nullable columns, written by `insertOrReplaceRecord` and
+  mapped back in `toDomain()`:
+
+  | Column               | Content                                                                                                                    |
+  |----------------------|----------------------------------------------------------------------------------------------------------------------------|
+  | `request_headers`    | headers encoded by `HeaderCodec` as `k1=v1&k2=v2` (`%`, `=`, `&` and control chars are percent-encoded); `NULL` when empty |
+  | `checksum_algorithm` | `ChecksumValidation.Algorithm.name` (`MD5`/`SHA1`/`SHA256`)                                                                |
+  | `checksum_hash`      | expected hex digest                                                                                                        |
+
+- **Migration:** `2.sqm` (schema v2 → v3) adds the columns for drivers that use
+  `DownloadDatabase.Schema.migrate` (Android, iOS). The desktop `DatabaseDriverFactory`
+  `migrateLegacySchema` adds any missing column on an existing file. Rows written before the
+  migration read back as "no headers / no checksum".
+- `resume()` passes `headers`, `expectedChecksum` and `group` into the rebuilt request.
+
+> **Security note:** headers are stored in plain text in the downloads database so a download can
+> resume after a process restart. If they contain long-lived secrets, protect the database file
+> (e.g. SQLCipher / platform encryption) or use short-lived tokens.
+
+Regression tests: `ResumeRetryRequestLossReproTest` (`downloader-runtime/src/desktopTest`) checks
+that retry/resume resend the original headers and that a corrupt payload ends as `FAILED`, and
+`SqlDelightDownloadRepositoryTest.headersAndChecksumRoundTrip` checks the storage round trip.
 
 ### `delete(id, deleteFiles)`
 

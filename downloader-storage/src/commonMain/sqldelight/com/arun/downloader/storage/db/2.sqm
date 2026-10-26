@@ -1,0 +1,6 @@
+-- v2 -> v3: persist the full request so resume()/retry() can replay auth headers and
+-- still enforce checksum validation.
+ALTER TABLE DownloadRecordEntity ADD COLUMN request_headers TEXT;
+ALTER TABLE DownloadRecordEntity ADD COLUMN checksum_algorithm TEXT;
+ALTER TABLE DownloadRecordEntity ADD COLUMN checksum_hash TEXT;
+

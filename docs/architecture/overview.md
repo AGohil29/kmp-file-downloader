@@ -162,12 +162,12 @@ Connecting`)** — states cannot be skipped.
 
 ## Testing strategy across modules
 
-| Module               | What's tested                                                                                                                                                               | Where                                |
-|----------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------|
-| `downloader-core`    | `DownloadStateMachine` transition rules (pure, no I/O)                                                                                                                      | `downloader-core/src/commonTest`     |
-| `downloader-network` | HTTP request/response mapping via `MockEngine` (no real network)                                                                                                            | `downloader-network/src/commonTest`  |
-| `downloader-storage` | SQLDelight queries against an in-memory SQLite DB; upgrade of a legacy on-disk DB (`DatabaseDriverFactoryMigrationTest`)                                                    | `downloader-storage/src/desktopTest` |
-| `downloader-runtime` | Full `DownloadTask` integration: real state machine + real repository (in-memory SQLite) + fake filesystem (`okio.fakefilesystem.FakeFileSystem`) + fake `NetworkTransport` | `downloader-runtime/src/desktopTest` |
+| Module               | What's tested                                                                                                                                                                                                                   | Where                                |
+|----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------|
+| `downloader-core`    | `DownloadStateMachine` transition rules (pure, no I/O)                                                                                                                                                                          | `downloader-core/src/commonTest`     |
+| `downloader-network` | HTTP request/response mapping via `MockEngine` (no real network)                                                                                                                                                                | `downloader-network/src/commonTest`  |
+| `downloader-storage` | SQLDelight queries against an in-memory SQLite DB (incl. headers/checksum round trip); upgrade of a legacy on-disk DB (`DatabaseDriverFactoryMigrationTest`); migrations `1.sqm`/`2.sqm` checked by `verifySqlDelightMigration` | `downloader-storage/src/desktopTest` |
+| `downloader-runtime` | Full `DownloadTask` integration: real state machine + real repository (in-memory SQLite) + fake filesystem (`okio.fakefilesystem.FakeFileSystem`) + fake `NetworkTransport`                                                     | `downloader-runtime/src/desktopTest` |
 
 `downloader-runtime`'s tests are the only ones that exercise the complete, wired-together engine
 end-to-end (minus real network/disk I/O, which are faked), which is why `DownloadTaskTest` lives

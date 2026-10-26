@@ -166,13 +166,30 @@ val activeSink = if (request.expectedChecksum != null && !isResuming) {
 
 - When resuming, the sink is opened with `append = true` so new bytes are written after the
   existing prefix instead of truncating it.
-- **Checksum validation is skipped when resuming.** A streaming `HashingSink` can only compute a
-  digest over the bytes that pass through it in the current process — it has no way to "replay"
-  the hash state for bytes written in an earlier run. Rather than compute an incorrect partial
-  hash (or add complexity to persist/restore hash state across runs), the task simply doesn't wrap
-  the sink in a `HashingSink` when `isResuming` is true, so `expectedChecksum` validation is
-  silently skipped for resumed downloads. Fresh downloads (including ones that fell back to a
-  full restart per case 2/3 above) still get full checksum validation as before.
+- **Checksum validation on resumed downloads.** A streaming `HashingSink` only sees the bytes
+  that pass through it in the current run, so it is used only for fresh downloads. Earlier
+  versions therefore *skipped* `expectedChecksum` validation entirely when `isResuming` was true.
+  That gap is now closed: after the body is written, the sink is flushed and closed, and if no
+  in-stream hash exists, the task hashes the **complete** staged `.part` file instead:
+
+  ```kotlin
+  request.expectedChecksum?.let { checksum ->
+      val actualHash = (hashingSink?.hash ?: hashFile(stagingPartFile, checksum.algorithm))
+          .hex().lowercase()
+      if (actualHash != checksum.expectedHash.lowercase()) {
+          throw DownloadError.NonRetryable.ChecksumMismatch(...)
+      }
+  }
+  ```
+
+  `hashFile` reads the file through `DownloadFileSystem.source(path)` (new port method,
+  implemented by `OkioDownloadFileSystem`) wrapped in an `okio.HashingSource`. This costs one
+  extra sequential read of the file, only for ranged resumes with a checksum. Fresh downloads
+  (including ones that fell back to a full restart per case 2/3 above) keep in-stream hashing.
+- The write handle is now closed **before** validation (not just before the atomic move), so the
+  staged file can be re-read for hashing.
+- For this to work after `resume()`/`retry()`, the checksum itself must survive; see
+  [Persisted request data](../scheduler/download-scheduler-and-file-downloader.md#persisted-request-data-headers--checksum).
 
 ### 5. Seeding the byte-pump counter and adding a final progress flush
 
@@ -237,3 +254,11 @@ in `DownloadTaskTest`) that exercises the new logic end-to-end:
 Both scenarios reuse the same `SqlDelightDownloadRepository` (in-memory SQLite via
 `JdbcSqliteDriver`) and `OkioDownloadFileSystem` (backed by Okio's `FakeFileSystem`) test
 infrastructure already established by `DownloadTaskTest`, so no real disk or network I/O occurs.
+
+Checksum-on-resume coverage lives in `ResumeRetryRequestLossReproTest`:
+
+- **`rangedResumeMustValidateChecksumOverWholeFile`** — a corrupt 4-byte prefix plus a genuine
+  `206` tail must end as `FAILED` with `ChecksumMismatch`.
+- **`rangedResumeWithGenuinePrefixCompletes`** — a genuine prefix plus `206` tail passes
+  validation and the committed file has the full, correct bytes.
+

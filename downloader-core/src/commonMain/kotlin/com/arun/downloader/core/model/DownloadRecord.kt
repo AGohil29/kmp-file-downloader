@@ -22,5 +22,7 @@ data class DownloadRecord(
     val createdAtEpochMs: Long,
     val updatedAtEpochMs: Long,
     val group: String? = null,
-    val finalPath: Path? = null
+    val finalPath: Path? = null,
+    val headers: Map<String, String> = emptyMap(),
+    val expectedChecksum: ChecksumValidation? = null
 )

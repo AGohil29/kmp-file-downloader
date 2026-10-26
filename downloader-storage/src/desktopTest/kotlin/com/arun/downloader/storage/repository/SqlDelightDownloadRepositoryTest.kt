@@ -49,6 +49,30 @@ class SqlDelightDownloadRepositoryTest {
         )
 
     @Test
+    fun headersAndChecksumRoundTrip() = runTest(testDispatcher) {
+        val id = DownloadId("dl_headers_01")
+        val headers = mapOf(
+            "Authorization" to "Bearer a=b&c%d",
+            "X-Weird" to "line1\nline2",
+            "Cookie" to "k=v; k2=v2"
+        )
+        val checksum = com.arun.downloader.core.model.ChecksumValidation(
+            com.arun.downloader.core.model.ChecksumValidation.Algorithm.SHA256, "abc123"
+        )
+        repository.insertOrUpdate(
+            id = id,
+            request = createSampleRequest().copy(headers = headers, expectedChecksum = checksum),
+            initialState = "QUEUED",
+            createdAtEpochMs = 1L,
+            updatedAtEpochMs = 1L
+        )
+
+        val record = repository.getById(id).shouldNotBeNull()
+        record.headers shouldBe headers
+        record.expectedChecksum shouldBe checksum
+    }
+
+    @Test
     fun insertAndRetrieveRecordMatchesMetadata() = runTest(testDispatcher) {
         val id = DownloadId("dl_persist_01")
         val request = createSampleRequest()

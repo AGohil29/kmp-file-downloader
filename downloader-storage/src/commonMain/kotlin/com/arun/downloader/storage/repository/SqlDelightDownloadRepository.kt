@@ -3,6 +3,7 @@ package com.arun.downloader.storage.repository
 import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import app.cash.sqldelight.coroutines.mapToOneOrNull
+import com.arun.downloader.core.model.ChecksumValidation
 import com.arun.downloader.core.model.DownloadError
 import com.arun.downloader.core.model.DownloadId
 import com.arun.downloader.core.model.DownloadRecord
@@ -48,7 +49,10 @@ class SqlDelightDownloadRepository(
             errorMessage = null,
             createdAtEpochMs = createdAtEpochMs,
             updatedAtEpochMs = updatedAtEpochMs,
-            downloadGroup = request.group
+            downloadGroup = request.group,
+            requestHeaders = HeaderCodec.encode(request.headers),
+            checksumAlgorithm = request.expectedChecksum?.algorithm?.name,
+            checksumHash = request.expectedChecksum?.expectedHash
         )
     }
 
@@ -148,6 +152,14 @@ class SqlDelightDownloadRepository(
         createdAtEpochMs = created_at_epoch_ms,
         updatedAtEpochMs = updated_at_epoch_ms,
         group = download_group,
-        finalPath = final_path?.toPath()
+        finalPath = final_path?.toPath(),
+        headers = HeaderCodec.decode(request_headers),
+        expectedChecksum = decodeChecksum(checksum_algorithm, checksum_hash)
     )
+
+    private fun decodeChecksum(algorithm: String?, hash: String?): ChecksumValidation? {
+        if (algorithm == null || hash == null) return null
+        val algo = ChecksumValidation.Algorithm.entries.firstOrNull { it.name == algorithm } ?: return null
+        return ChecksumValidation(algo, hash)
+    }
 }
