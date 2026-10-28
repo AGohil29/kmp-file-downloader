@@ -262,3 +262,29 @@ Checksum-on-resume coverage lives in `ResumeRetryRequestLossReproTest`:
 - **`rangedResumeWithGenuinePrefixCompletes`** — a genuine prefix plus `206` tail passes
   validation and the committed file has the full, correct bytes.
 
+## HTTP 416 / 412 recovery
+The transport maps these statuses to typed errors **only when a `Range` was sent**; `DownloadTask` recovers once.
+| Situation | Action |
+|---|---|
+| Staged file larger than persisted `totalBytes` (pre-flight) | Delete staged file, request without `Range` |
+| `416` with `Content-Range: bytes */N` and `N == stagedSize` | Staged file is complete: skip the network body, validate (size/checksum) and atomically commit |
+| `416` with a different or unknown total | Delete staged file, clear etag/lastModified/progress, one fresh request without `Range`/`If-Range` |
+| `412` | Same as the previous row |
+| `416`/`412` on the fresh request | Non-retryable failure (`ServerDoesNotSupportRange` / `HttpError`); no further loops |
+
+## Resume safety rules (validators, encoding)
+
+- **Strong validators only.** `If-Range` uses the stored ETag unless it is weak (`W/...`, RFC 7233
+  section 3.2); then `Last-Modified` is used.
+- **No validator, no ranged resume.** If a partial file exists but no strong validator is stored,
+  the partial file is deleted and the download restarts from byte 0, to avoid splicing two
+  versions of the resource.
+- **Validators survive a 206.** On an accepted resume, an omitted `ETag`/`Last-Modified` in the
+  206 response does not erase the stored values. Fresh/restarted downloads use response values only.
+- **`Accept-Encoding: identity`** is sent with every ranged request (`KtorNetworkTransport`), since
+  byte offsets address the identity representation.
+- **Typed errors.** `NonRetryable.RangeNotSatisfiable(totalBytes)` (416, total parsed from
+  `Content-Range: bytes */N`) and `PreconditionFailed` (412) are thrown by the transport only when a
+  `Range` was sent. A 416 without `Range` stays `ServerDoesNotSupportRange`; a 412 without `Range`
+  is `HttpError`. Both are recovered inside `DownloadTask`.
+

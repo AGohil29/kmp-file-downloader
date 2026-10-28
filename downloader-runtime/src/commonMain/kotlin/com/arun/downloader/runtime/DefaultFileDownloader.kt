@@ -2,6 +2,7 @@ package com.arun.downloader.runtime
 
 import com.arun.downloader.core.FileDownloader
 import com.arun.downloader.core.engine.DownloadTask
+import com.arun.downloader.core.engine.fileNameFromUrl
 import com.arun.downloader.core.model.DownloadError
 import com.arun.downloader.core.model.DownloadId
 import com.arun.downloader.core.model.DownloadRecord
@@ -136,7 +137,7 @@ class DefaultFileDownloader(
         val request = DownloadRequest(
             url = record.url,
             destinationDirectory = record.destinationDirectory,
-            fileName = record.fileName ?: record.url.substringAfterLast('/'),
+            fileName = record.fileName ?: fileNameFromUrl(record.url).ifBlank { null },
             priority = record.priority,
             headers = record.headers,
             conflictStrategy = record.conflictStrategy,
@@ -161,10 +162,13 @@ class DefaultFileDownloader(
     }
 
     override suspend fun cancel(id: DownloadId) {
+        // scheduler.cancel joins the running job, so the task has released its file handles
+        // before the staging file is purged.
         scheduler.cancel(id)
         taskMutex.withLock {
             activeTasks.value = activeTasks.value - id
         }
+        fileSystem.delete(stagingPartFile(id))
         repository.updateState(id, "CANCELLED", currentTimeEpochMs())
     }
 
@@ -176,13 +180,13 @@ class DefaultFileDownloader(
         cancel(id)
         val record = repository.getById(id)
         if (deleteFiles && record != null) {
-            val partFile = config.stagingDirectory / ".downloader_staging" / "${id.raw}.part"
-            fileSystem.delete(partFile)
-
             record.finalPath?.let { fileSystem.delete(it) }
         }
         repository.delete(id)
     }
+
+    private fun stagingPartFile(id: DownloadId) =
+        config.stagingDirectory / ".downloader_staging" / "${id.raw}.part"
 
     override suspend fun pauseGroup(groupName: String) {
         val records = repository.getByGroup(groupName)
@@ -234,7 +238,7 @@ class DefaultFileDownloader(
         // Prefer the persisted committed path; fall back to the requested name only for legacy
         // records completed before final_path was tracked.
         val resolvedPath = record.finalPath?.toString()
-            ?: (record.destinationDirectory / (record.fileName ?: record.url.substringAfterLast('/'))).toString()
+            ?: (record.destinationDirectory / (record.fileName ?: fileNameFromUrl(record.url))).toString()
 
         return when (record.state) {
             "QUEUED" -> DownloadState.Queued(id, record.priority, record.createdAtEpochMs)
@@ -255,14 +259,73 @@ class DefaultFileDownloader(
                 totalBytes = record.downloadedBytes,
                 completedAtEpochMs = record.updatedAtEpochMs
             )
-            "FAILED" -> DownloadState.Failed(
-                id = id,
-                error = DownloadError.NonRetryable.Unknown(record.errorMessage ?: "Failed"),
-                canRetry = true,
-                downloadedBytes = record.downloadedBytes
-            )
+            "FAILED" -> {
+                val error = restoreError(record.errorType, record.errorMessage)
+                DownloadState.Failed(
+                    id = id,
+                    error = error,
+                    canRetry = error is DownloadError.Retryable,
+                    downloadedBytes = record.downloadedBytes
+                )
+            }
             "CANCELLED" -> DownloadState.Cancelled(id)
             else -> DownloadState.Idle(id)
+        }
+    }
+
+    /**
+     * Rebuilds a [DownloadError] from the persisted `error_type` (class simple name) and message.
+     * Only type + message are stored, so structured fields are recovered best-effort from the
+     * message; unrecognised types fall back to [DownloadError.NonRetryable.Unknown].
+     */
+    private fun restoreError(type: String?, message: String?): DownloadError {
+        val numbers = Regex("-?\\d+").findAll(message.orEmpty()).map { it.value }.toList()
+        val code = numbers.firstOrNull()?.toIntOrNull() ?: 0
+        fun msg(default: String) = message ?: default
+        return when (type) {
+            "NetworkTimeout" -> DownloadError.Retryable.NetworkTimeout(msg("Network timed out"))
+            "ConnectionInterrupted" ->
+                DownloadError.Retryable.ConnectionInterrupted(msg("Connection was interrupted"))
+            "ServerUnavailable" -> DownloadError.Retryable.ServerUnavailable(code, msg("Server unavailable: $code"))
+            "RateLimited" -> DownloadError.Retryable.RateLimited(null, msg("Rate limit reached"))
+            "HttpError" -> DownloadError.NonRetryable.HttpError(code, msg("HTTP error $code"))
+            "InsufficientDiskSpace" -> DownloadError.NonRetryable.InsufficientDiskSpace(
+                requiredBytes = numbers.getOrNull(0)?.toLongOrNull() ?: 0L,
+                availableBytes = numbers.getOrNull(1)?.toLongOrNull() ?: 0L,
+                message = msg("Insufficient disk space")
+            )
+            "FileSystemPermissionDenied" -> DownloadError.NonRetryable.FileSystemPermissionDenied(
+                path = message?.substringAfter("accessing ", "").orEmpty(),
+                message = msg("Permission denied")
+            )
+            "MalformedUrl" -> DownloadError.NonRetryable.MalformedUrl(
+                url = message?.substringAfter("Invalid URL: ", "").orEmpty(),
+                message = msg("Invalid URL")
+            )
+            "FileAlreadyExists" -> DownloadError.NonRetryable.FileAlreadyExists(
+                path = message?.substringAfter("destination: ", "").orEmpty(),
+                message = msg("File already exists")
+            )
+            "ServerDoesNotSupportRange" -> DownloadError.NonRetryable.ServerDoesNotSupportRange(
+                msg("Server rejected byte range request with non-resumable status.")
+            )
+            "RangeNotSatisfiable" -> DownloadError.NonRetryable.RangeNotSatisfiable(
+                totalBytes = null,
+                message = msg("Requested byte range not satisfiable (HTTP 416).")
+            )
+            "PreconditionFailed" -> DownloadError.NonRetryable.PreconditionFailed(
+                msg("Precondition failed (HTTP 412).")
+            )
+            "ChecksumMismatch" -> DownloadError.NonRetryable.ChecksumMismatch(
+                expected = message?.substringAfter("Expected: ", "")?.substringBefore(",").orEmpty(),
+                actual = message?.substringAfter("actual: ", "").orEmpty(),
+                message = msg("Integrity check failed")
+            )
+            "PathTraversalDetected" -> DownloadError.NonRetryable.PathTraversalDetected(
+                unsafePath = message?.substringAfter("detected: ", "").orEmpty(),
+                message = msg("Unsafe filename or path detected")
+            )
+            else -> DownloadError.NonRetryable.Unknown(msg("Failed"))
         }
     }
 

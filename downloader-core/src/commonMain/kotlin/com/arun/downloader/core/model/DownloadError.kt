@@ -73,6 +73,22 @@ sealed class DownloadError(
             override val cause: Throwable? = null
         ) : NonRetryable(message, cause)
 
+        /**
+         * HTTP 416 in response to a ranged request. [totalBytes] is parsed from
+         * `Content-Range: bytes * /<total>` when present. Recovered inside DownloadTask.
+         */
+        data class RangeNotSatisfiable(
+            val totalBytes: Long?,
+            override val message: String = "Requested byte range not satisfiable (HTTP 416).",
+            override val cause: Throwable? = null
+        ) : NonRetryable(message, cause)
+
+        /** HTTP 412 in response to a conditional ranged request. Recovered inside DownloadTask. */
+        data class PreconditionFailed(
+            override val message: String = "Precondition failed (HTTP 412).",
+            override val cause: Throwable? = null
+        ) : NonRetryable(message, cause)
+
         data class ChecksumMismatch(
             val expected: String,
             val actual: String,

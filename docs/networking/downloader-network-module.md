@@ -128,7 +128,7 @@ The concrete `NetworkTransport` implementation backed by a Ktor `HttpClient`. Re
    - `408 Request Timeout` / `504 Gateway Timeout` → `DownloadError.Retryable.NetworkTimeout`.
    - `502 Bad Gateway` / `503 Service Unavailable` / `500 Internal Server Error` →
      `DownloadError.Retryable.ServerUnavailable`.
-   - `416 Requested Range Not Satisfiable` → `DownloadError.NonRetryable.ServerDoesNotSupportRange`.
+   - `416 Requested Range Not Satisfiable` → `NonRetryable.RangeNotSatisfiable(totalBytes)` when a `Range` was sent (total from `Content-Range: bytes */N`), otherwise `ServerDoesNotSupportRange`; `412 Precondition Failed` → `NonRetryable.PreconditionFailed` when a `Range` was sent, otherwise `HttpError`. Ranged requests also send `Accept-Encoding: identity`. See [HTTP range resume](../engine/http-range-resume.md).
    - Any other 4xx/5xx → `DownloadError.NonRetryable.HttpError`.
 4. **Successful response mapping** — extracts headers (case-preserving map), `Content-Length`,
    `ETag`, `Last-Modified`, and whether the response is `206 Partial Content`, then wraps

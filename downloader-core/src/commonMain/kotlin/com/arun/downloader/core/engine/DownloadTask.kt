@@ -63,7 +63,7 @@ class DownloadTask(
             repository.updateState(id, "CONNECTING", getEpochMs())
 
             // Determine local partial file state
-            val localFileSize = if (fileSystem.exists(stagingPartFile)) {
+            var localFileSize = if (fileSystem.exists(stagingPartFile)) {
                 fileSystem.size(stagingPartFile)
             } else {
                 0L
@@ -72,7 +72,24 @@ class DownloadTask(
             val persistedRecord = repository.getById(id)
             val storedEtag = persistedRecord?.etag
             val storedLastModified = persistedRecord?.lastModified
-            val ifRange = storedEtag ?: storedLastModified
+            // If-Range requires a strong validator (RFC 7233 §3.2): weak ETags ("W/...") are skipped
+            // in favour of Last-Modified.
+            val ifRange = storedEtag?.takeIf { !it.trimStart().startsWith("W/", ignoreCase = true) }
+                ?: storedLastModified
+
+            // Pre-flight: a staged file larger than the known total can never be resumed.
+            val knownTotal = persistedRecord?.totalBytes
+            if (knownTotal != null && localFileSize > knownTotal) {
+                fileSystem.delete(stagingPartFile)
+                localFileSize = 0L
+            }
+
+            // Without a strong validator we cannot detect that the resource changed, so a ranged
+            // resume could splice bytes from two versions. Discard the partial file and restart.
+            if (localFileSize > 0L && ifRange == null) {
+                fileSystem.delete(stagingPartFile)
+                localFileSize = 0L
+            }
 
             // Build HTTP request with Range headers if partial data exists
             val requestRangeStart = if (localFileSize > 0L) localFileSize else null
@@ -84,14 +101,36 @@ class DownloadTask(
                 ifRange = if (requestRangeStart != null) ifRange else null
             )
 
-            val netResponse = network.execute(netRequest)
+            // 416/412 recovery: a single bounded step, never a loop.
+            var netResponse: NetworkResponse? = null
+            var stagedAlreadyComplete = false
+            var completeTotal: Long? = null
+            try {
+                netResponse = network.execute(netRequest)
+            } catch (e: DownloadError.NonRetryable.RangeNotSatisfiable) {
+                if (e.totalBytes != null && e.totalBytes == localFileSize) {
+                    // Staged file already holds the full payload: skip to validation + commit.
+                    stagedAlreadyComplete = true
+                    completeTotal = e.totalBytes
+                } else {
+                    netResponse = restartFresh(stagingPartFile)
+                    localFileSize = 0L
+                }
+            } catch (e: DownloadError.NonRetryable.PreconditionFailed) {
+                netResponse = restartFresh(stagingPartFile)
+                localFileSize = 0L
+            }
             response = netResponse
+
             // Evaluate response against resumption requirements
-            val isResuming: Boolean
+            var isResuming = false
             val totalBytes: Long?
             var currentBytes: Long
 
-            if (netResponse.isPartialContent && requestRangeStart != null) {
+            if (stagedAlreadyComplete || netResponse == null) {
+                totalBytes = completeTotal
+                currentBytes = localFileSize
+            } else if (netResponse.isPartialContent && localFileSize > 0L) {
                 // HTTP 206 Partial Content received
                 val contentRange = ContentRange.parseOrNull(netResponse.getHeader("Content-Range"))
                 val rangeMatches = contentRange != null && contentRange.rangeStart == localFileSize
@@ -117,46 +156,67 @@ class DownloadTask(
                 totalBytes = netResponse.contentLength
             }
 
+            // On an accepted resume the stored validators still describe this file, so a 206 that
+            // omits them must not erase them. Fresh/restarted downloads use the response values only.
+            val headerEtag = when {
+                netResponse == null -> storedEtag
+                isResuming -> netResponse.etag ?: storedEtag
+                else -> netResponse.etag
+            }
+            val headerLastModified = when {
+                netResponse == null -> storedLastModified
+                isResuming -> netResponse.lastModified ?: storedLastModified
+                else -> netResponse.lastModified
+            }
+
             // Update state machine and repository with negotiated headers
             stateMachine.transition(
                 DownloadStateEvent.HeaderReceived(
                     totalBytes = totalBytes,
-                    etag = netResponse.etag,
-                    lastModified = netResponse.lastModified
+                    etag = headerEtag,
+                    lastModified = headerLastModified
                 )
             )
 
             repository.updateConnectionHeaders(
                 id = id,
                 totalBytes = totalBytes,
-                etag = netResponse.etag,
-                lastModified = netResponse.lastModified,
+                etag = headerEtag,
+                lastModified = headerLastModified,
                 timestampEpochMs = getEpochMs()
             )
 
-            // Open disk sink (Append if resuming, fresh sink if restarting)
-            rawSink = fileSystem.sink(stagingPartFile, append = isResuming)
-
-            // Checksums can only be computed in-stream on fresh downloads (not resuming slices)
-            val activeSink = if (request.expectedChecksum != null && !isResuming) {
-                hashingSink = createHashingSink(rawSink, request.expectedChecksum)
-                hashingSink
+            if (netResponse == null || stagedAlreadyComplete) {
+                // Nothing to stream; report full progress and fall through to validation.
+                stateMachine.transition(
+                    DownloadStateEvent.ProgressUpdate(downloadedBytes = currentBytes, speedBytesPerSecond = 0L)
+                )
+                repository.updateProgress(id, currentBytes, getEpochMs())
             } else {
-                rawSink
+                // Open disk sink (Append if resuming, fresh sink if restarting)
+                rawSink = fileSystem.sink(stagingPartFile, append = isResuming)
+
+                // Checksums can only be computed in-stream on fresh downloads (not resuming slices)
+                val activeSink = if (request.expectedChecksum != null && !isResuming) {
+                    hashingSink = createHashingSink(rawSink, request.expectedChecksum)
+                    hashingSink
+                } else {
+                    rawSink
+                }
+                bufferedSink = activeSink.buffer()
+
+                // Pump remaining stream bytes to disk
+                pumpBytes(
+                    channel = netResponse.bodyChannel,
+                    sink = bufferedSink,
+                    initialDownloadedBytes = currentBytes
+                )
+
+                bufferedSink.flush()
             }
-            bufferedSink = activeSink.buffer()
-
-            // Pump remaining stream bytes to disk
-            pumpBytes(
-                channel = netResponse.bodyChannel,
-                sink = bufferedSink,
-                initialDownloadedBytes = currentBytes
-            )
-
-            bufferedSink.flush()
             // Release the write handle before validation so the staged file can be re-read
             // (ranged-resume checksum) and later atomically moved.
-            bufferedSink.close()
+            bufferedSink?.close()
             bufferedSink = null
             rawSink = null
 
@@ -183,7 +243,7 @@ class DownloadTask(
             }
 
             // Resolve target path and perform atomic commit
-            val finalFileName = request.fileName ?: fileSystem.sanitizeFileName(request.url.substringAfterLast('/'))
+            val finalFileName = request.fileName ?: fileSystem.sanitizeFileName(fileNameFromUrl(request.url))
             val finalDestinationPath = fileSystem.resolveUniquePath(
                 directory = request.destinationDirectory,
                 baseName = finalFileName,
@@ -223,6 +283,27 @@ class DownloadTask(
                 closeQuietly(bufferedSink, rawSink)
             }
         }
+    }
+
+    /**
+     * Recovery for HTTP 412 / unrecoverable 416: discard the partial file and persisted validators,
+     * then issue exactly one fresh request without Range/If-Range. A repeat failure propagates.
+     */
+    private suspend fun restartFresh(stagingPartFile: Path): NetworkResponse {
+        if (fileSystem.exists(stagingPartFile)) {
+            fileSystem.delete(stagingPartFile)
+        }
+        repository.updateConnectionHeaders(
+            id = id,
+            totalBytes = null,
+            etag = null,
+            lastModified = null,
+            timestampEpochMs = getEpochMs()
+        )
+        repository.updateProgress(id, 0L, getEpochMs())
+        return network.execute(
+            NetworkRequest(url = request.url, headers = request.headers, rangeStart = null, ifRange = null)
+        )
     }
 
     private suspend fun pumpBytes(

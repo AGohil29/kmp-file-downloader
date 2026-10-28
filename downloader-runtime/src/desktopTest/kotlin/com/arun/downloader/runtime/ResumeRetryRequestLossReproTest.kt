@@ -200,6 +200,9 @@ class ResumeRetryRequestLossReproTest {
         val part = stagingDir / ".downloader_staging" / "${id.raw}.part"
         fakeFs.createDirectories(part.parent!!)
         fakeFs.write(part) { write("EVIL".encodeToByteArray()) }
+        // A ranged resume requires a strong validator to have been recorded.
+        repository.updateConnectionHeaders(id, goodPayload.size.toLong(), "\"v1\"", null, 2_000L)
+        repository.updateState(id, "FAILED", 2_001L) // updateConnectionHeaders flips state to DOWNLOADING
 
         downloader.resume(id)
         val finalState = awaitState(id, "COMPLETED", "FAILED")
@@ -236,6 +239,9 @@ class ResumeRetryRequestLossReproTest {
         val part = stagingDir / ".downloader_staging" / "${id.raw}.part"
         fakeFs.createDirectories(part.parent!!)
         fakeFs.write(part) { write(goodPayload.copyOfRange(0, 4)) }
+        // A ranged resume requires a strong validator to have been recorded.
+        repository.updateConnectionHeaders(id, goodPayload.size.toLong(), "\"v1\"", null, 2_000L)
+        repository.updateState(id, "FAILED", 2_001L) // updateConnectionHeaders flips state to DOWNLOADING
 
         downloader.resume(id)
         assertEquals("COMPLETED", awaitState(id, "COMPLETED", "FAILED"))

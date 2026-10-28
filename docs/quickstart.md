@@ -185,10 +185,10 @@ downloader.shutdown()                   // on app termination
 After a process restart, downloads that were queued or in flight come back as `Paused` and can
 be resumed.
 
-`resume()` and `retry()` replay the original request: its `headers` (e.g. auth tokens) and
-`expectedChecksum` are persisted with the download, so a resumed download is still authenticated
-and still checksum-validated (over the whole file, even after an HTTP 206 range resume). Headers
-are stored in plain text in the downloads database; protect it if they contain long-lived secrets.
+Downloads that had `Failed` keep their error type after a restart (e.g. `HttpError`,
+`ChecksumMismatch`, `NetworkTimeout`), and `canRetry` is `true` only for `Retryable` errors.
+Structured fields are recovered from the stored message, so `RateLimited.retryAfterMs` and
+`RangeNotSatisfiable.totalBytes` come back as `null`.
 
 ---
 
@@ -198,4 +198,3 @@ are stored in plain text in the downloads database; protect it if they contain l
 - [Scheduler, public API and `DefaultFileDownloader`](scheduler/download-scheduler-and-file-downloader.md)
 - [HTTP range / resume](engine/http-range-resume.md)
 - [Testing docs](testing/download-state-machine.md)
-

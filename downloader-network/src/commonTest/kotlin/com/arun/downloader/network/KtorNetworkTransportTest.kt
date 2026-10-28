@@ -249,4 +249,63 @@ class KtorNetworkTransportTest {
             transport.close()
         }
     }
+
+    @Test
+    fun http416OnRangedRequestIsTypedWithTotalFromContentRange() = runTest {
+        val transport = KtorNetworkTransport(HttpClient(MockEngine {
+            respond("", HttpStatusCode.RequestedRangeNotSatisfiable, headersOf(HttpHeaders.ContentRange, "bytes */1234"))
+        }))
+        try {
+            val error = shouldThrow<DownloadError.NonRetryable.RangeNotSatisfiable> {
+                transport.execute(NetworkRequest("https://mock.com/f", rangeStart = 1234L))
+            }
+            error.totalBytes shouldBe 1234L
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
+    fun http416WithoutRangeHeaderIsServerDoesNotSupportRange() = runTest {
+        val transport = KtorNetworkTransport(HttpClient(MockEngine {
+            respond("", HttpStatusCode.RequestedRangeNotSatisfiable)
+        }))
+        try {
+            shouldThrow<DownloadError.NonRetryable.ServerDoesNotSupportRange> {
+                transport.execute(NetworkRequest("https://mock.com/f"))
+            }
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
+    fun http412OnRangedRequestIsPreconditionFailed() = runTest {
+        val transport = KtorNetworkTransport(HttpClient(MockEngine {
+            respond("", HttpStatusCode.PreconditionFailed)
+        }))
+        try {
+            shouldThrow<DownloadError.NonRetryable.PreconditionFailed> {
+                transport.execute(NetworkRequest("https://mock.com/f", rangeStart = 5L, ifRange = "\"e\""))
+            }
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
+    fun rangedRequestMustDisableContentEncoding() = runTest {
+        var acceptEncoding: String? = "<unset>"
+        val transport = KtorNetworkTransport(HttpClient(MockEngine { req ->
+            acceptEncoding = req.headers[HttpHeaders.AcceptEncoding]
+            respond("", HttpStatusCode.PartialContent, headersOf(HttpHeaders.ContentRange, "bytes 5-9/10"))
+        }))
+        try {
+            transport.execute(NetworkRequest("https://mock.com/f", rangeStart = 5L, ifRange = "\"e\"")).close()
+            println("ranged Accept-Encoding=$acceptEncoding")
+            acceptEncoding shouldBe "identity" // BUG: not set, server may compress and break byte offsets
+        } finally {
+            transport.close()
+        }
+    }
 }

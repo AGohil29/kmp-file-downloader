@@ -1,5 +1,6 @@
 package com.arun.downloader.runtime.ios
 
+import com.arun.downloader.core.engine.fileNameFromUrl
 import com.arun.downloader.core.model.DownloadError
 import com.arun.downloader.core.model.DownloadId
 import com.arun.downloader.core.model.DownloadPriority
@@ -168,7 +169,7 @@ class IosBackgroundSessionBridge(
                 val targetDirectory = record.destinationDirectory
                 fileSystem.createDirectories(targetDirectory)
 
-                val finalFileName = record.fileName ?: fileSystem.sanitizeFileName(record.url.substringAfterLast('/'))
+                val finalFileName = record.fileName ?: fileSystem.sanitizeFileName(fileNameFromUrl(record.url))
                 val finalDestination = fileSystem.resolveUniquePath(
                     directory = targetDirectory,
                     baseName = finalFileName,

@@ -428,23 +428,20 @@ override suspend fun delete(id: DownloadId, deleteFiles: Boolean) {
     cancel(id)
     val record = repository.getById(id)
     if (deleteFiles && record != null) {
-        val partFile = config.stagingDirectory / ".downloader_staging" / "${id.raw}.part"
-        fileSystem.delete(partFile)
-
-        val resolvedFileName = record.fileName ?: record.url.substringAfterLast('/')
-        val destinationFile = record.destinationDirectory / resolvedFileName
-        fileSystem.delete(destinationFile)
+        record.finalPath?.let { fileSystem.delete(it) }
     }
     repository.delete(id)
 }
 ```
 
 1. First cancels any in-flight/queued work for the id (reusing `cancel`'s scheduler + in-memory
-   cleanup, plus marking the record `"CANCELLED"`, before it's deleted outright).
-2. If `deleteFiles` is true (the default), removes **both** possible on-disk artifacts: the
-   staging `.part` file (present if the download was ever paused/partial) and the final
-   destination file (present if it had already completed) — computed using the same
-   `.downloader_staging/<id>.part` convention `DownloadTask` uses internally.
+   cleanup, plus marking the record `"CANCELLED"`, before it's deleted outright). `cancel` itself
+   now deletes the staging `.part` file once the scheduler has joined the job (so file handles
+   are released) and then persists `"CANCELLED"`; a cancelled download no longer leaves partial
+   data behind. Covered by `CancelPurgesPartFileReproTest`.
+2. If `deleteFiles` is true (the default), removes the committed file recorded in
+   `record.finalPath` (present if the download had completed). The staging `.part` file is already
+   gone because of step 1.
 3. Finally removes the database record entirely via `repository.delete(id)`.
 
 ### Download groups
@@ -524,7 +521,26 @@ finish cleanup before the rest of the teardown runs.
   class instance, reconstructing whatever fields are available on the record (bytes, totals,
   etag/lastModified, error message) — any unrecognized state string falls back to
   `DownloadState.Idle(id)`. For `Completed`, the path is `record.finalPath`; only legacy records
-  without it fall back to `destinationDirectory / (fileName ?: url.substringAfterLast('/'))`.
+  without it fall back to `destinationDirectory / (fileName ?: fileNameFromUrl(url))`.
+- For `FAILED` records, the error is rebuilt by the private `restoreError(errorType, errorMessage)`
+  from the persisted `error_type` (the `DownloadError` subclass simple name) and `error_message`,
+  and `canRetry` is `error is DownloadError.Retryable` — the same rule `DownloadTask` applies live.
+  Previously every failure was rebuilt as `NonRetryable.Unknown` with `canRetry = true`, so the
+  concrete type and retryability were lost after a restart. Unknown/missing types still fall back
+  to `NonRetryable.Unknown(message ?: "Failed")`.
+  - Only type and message are persisted, so structured fields (`httpCode`, `expected`/`actual`
+    checksum, paths, disk-space numbers) are parsed best-effort from the default message formats.
+    `RateLimited.retryAfterMs` and `RangeNotSatisfiable.totalBytes` are restored as `null`.
+  - Covered by `FailedStateRestoreReproTest` (`downloader-runtime` `desktopTest`).
+
+### File names from URLs (`fileNameFromUrl`)
+
+`substringAfterLast('/')` kept query strings, fragments and percent-escapes (`a.zip?token=1`,
+`my%20file.zip`). `core.engine.fileNameFromUrl(url)` (used by `DownloadTask`,
+`DefaultFileDownloader` and `IosBackgroundSessionBridge`) drops `?query`/`#fragment`, takes the
+last path segment and percent-decodes it (UTF-8). A bare host or trailing `/` yields `""`, which
+`sanitizeFileName` turns into a generated fallback name. Tests: `UrlFileNameTest`,
+`UrlFileNameReproTest`.
 
 ### Timestamps (`EpochClock`) — bug fixed
 
