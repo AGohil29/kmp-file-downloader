@@ -15,6 +15,13 @@ val dokkaJavadocJar by tasks.registering(Jar::class) {
     from(tasks.named("dokkaHtml"))
 }
 
+// Ensure the LICENSE file is included in META-INF for all published JAR artifacts
+tasks.withType<Jar>().configureEach {
+    from(rootProject.file("LICENSE")) {
+        into("META-INF")
+    }
+}
+
 fun resolveSecret(name: String): String? {
     return (findProperty(name) as? String)
         ?: (findProperty(name.lowercase()) as? String)
@@ -26,6 +33,13 @@ val resolvedUsername = resolveSecret("sonatypeUsername") ?: ""
 val resolvedPassword = resolveSecret("sonatypePassword") ?: ""
 val resolvedSigningKey = resolveSecret("signingKey")
 val resolvedSigningPassword = resolveSecret("signingPassword")
+
+// Published artifact base name: downloader-runtime -> kmp-file-downloader,
+// downloader-core -> kmp-file-downloader-core, etc.
+val publishedBaseName = when (val n = project.name) {
+    "downloader-runtime" -> "kmp-file-downloader"
+    else -> "kmp-file-downloader-" + n.removePrefix("downloader-")
+}
 
 publishing {
     // Publish to Sonatype Central Portal
@@ -45,9 +59,8 @@ publishing {
 
     // Configure POM metadata across all targets (Desktop, Android, iOS Native)
     publications.withType<MavenPublication>().configureEach {
-        if (project.name == "downloader-runtime") {
-            artifactId = artifactId.replace("downloader-runtime", "kmp-file-downloader")
-        }
+        // Replaces only the project-name prefix, keeping target suffixes (-desktop, -android, -iosarm64...)
+        artifactId = artifactId.replaceFirst(project.name, publishedBaseName)
         artifact(dokkaJavadocJar)
 
         pom {

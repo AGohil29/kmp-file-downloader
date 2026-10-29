@@ -10,8 +10,8 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":downloader-core"))
-            implementation(libs.findLibrary("okio").get())
+            api(project(":downloader-core"))
+            api(libs.findLibrary("okio").get())
         }
 
         commonTest.dependencies {

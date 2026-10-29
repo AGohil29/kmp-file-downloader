@@ -10,8 +10,8 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            implementation(project(":downloader-core"))
-            implementation(libs.findLibrary("ktor-client-core").get())
+            api(project(":downloader-core"))
+            api(libs.findLibrary("ktor-client-core").get())
         }
 
         androidMain.dependencies {
