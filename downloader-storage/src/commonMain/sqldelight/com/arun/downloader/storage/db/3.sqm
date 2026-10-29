@@ -1,0 +1,5 @@
+-- v3 -> v4: persist the OS background-transfer task id and resume data so an iOS
+-- background NSURLSession download can be re-attached/resumed after the process dies.
+ALTER TABLE DownloadRecordEntity ADD COLUMN background_task_id INTEGER;
+ALTER TABLE DownloadRecordEntity ADD COLUMN resume_data BLOB;
+

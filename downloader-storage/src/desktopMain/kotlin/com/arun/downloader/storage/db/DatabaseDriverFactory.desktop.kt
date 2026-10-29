@@ -56,5 +56,11 @@ actual class DatabaseDriverFactory(
                 driver.execute(null, "ALTER TABLE DownloadRecordEntity ADD COLUMN $column TEXT", 0)
             }
         }
+        if ("background_task_id" !in columns) {
+            driver.execute(null, "ALTER TABLE DownloadRecordEntity ADD COLUMN background_task_id INTEGER", 0)
+        }
+        if ("resume_data" !in columns) {
+            driver.execute(null, "ALTER TABLE DownloadRecordEntity ADD COLUMN resume_data BLOB", 0)
+        }
     }
 }

@@ -7,6 +7,8 @@ import com.arun.downloader.core.model.DownloaderConfig
 import com.arun.downloader.filesystem.OkioDownloadFileSystem
 import com.arun.downloader.network.KtorNetworkTransport
 import com.arun.downloader.runtime.DefaultFileDownloader
+import com.arun.downloader.runtime.ios.IosAppDelegateHelper
+import com.arun.downloader.runtime.ios.IosBackgroundSessionBridge
 import com.arun.downloader.storage.db.DownloadDatabase
 import com.arun.downloader.storage.db.DownloadRecordEntity
 import com.arun.downloader.storage.repository.SqlDelightDownloadRepository

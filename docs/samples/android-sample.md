@@ -58,6 +58,15 @@ include(":samples:sample-android")
 - Byte counts and speed update while data is still arriving; see
   [`progress-streaming.md`](../testing/progress-streaming.md).
 
+## Background downloads via WorkManager
+
+The **Background** button on the download screen calls `WorkManager.enqueueBackgroundDownload(...)`,
+which runs `DownloadWorkManagerWorker`. `MainActivity` sets
+`DownloadWorkManagerWorker.downloaderFactoryOverride` to the screen's downloader so the worker shares
+its queue and database. `DownloadScreen` exposes this through the optional `onEnqueueBackground`
+callback (other platforms leave it unset and the button is hidden). If work runs after a process
+restart before the activity opens, the override is not set yet; set it in an `Application` class.
+
 ## Testing
 
 The Android-target `downloader-core` and `downloader-network` unit tests run on the host JVM:

@@ -288,6 +288,19 @@ starting and finishing, and lets `observe()` return the *live* `StateFlow` for i
    with stale entries.
 4. Returns the `DownloadId` immediately — the actual transfer runs asynchronously on `scope`.
 
+### `enqueue(request, id)` — idempotent enqueue
+
+`enqueue(request, id: DownloadId)` lets an external scheduler (e.g. a WorkManager worker) supply a
+stable id. `enqueue(request)` simply delegates with `DownloadId.generate()`.
+
+- No record for `id` → inserted and scheduled like a normal enqueue.
+- Record `COMPLETED`, or a non-terminal live task exists → no-op.
+- Otherwise (paused/failed/cancelled, or a task that just published its terminal state) → the
+  old job is joined via `scheduler.cancel(id)` if needed, then `resume(id)` re-schedules it, reusing
+  the staging `.part` file so the transfer continues with an HTTP Range request.
+
+See [Android WorkManager](../android/android-notifications-and-workmanager.md).
+
 ### `observe(id)` — live vs. cold reconstruction
 
 - If the download is active (in `activeTasks`), its real `DownloadTask.state` is returned directly.
@@ -532,6 +545,16 @@ finish cleanup before the rest of the teardown runs.
     checksum, paths, disk-space numbers) are parsed best-effort from the default message formats.
     `RateLimited.retryAfterMs` and `RangeNotSatisfiable.totalBytes` are restored as `null`.
   - Covered by `FailedStateRestoreReproTest` (`downloader-runtime` `desktopTest`).
+
+### Background transfer engine (`backgroundEngine`)
+
+`DefaultFileDownloader` accepts an optional `BackgroundTransferEngine` (core). When set (iOS:
+`IosBackgroundSessionBridge`), `enqueue`, `resume`, `pause` and `cancel` delegate to it instead of the
+scheduler/`DownloadTask`/`NetworkTransport`; the engine writes state to the repository and `observe`
+falls back to persisted records. `enqueue` with an existing id only resumes if the record is not
+`QUEUED`/`CONNECTING`/`DOWNLOADING`/`COMPLETED`. Storage gained `background_task_id` and
+`resume_data` columns (migration `3.sqm`) behind `BackgroundTaskStore`. See
+`docs/runtime/ios-integration.md`.
 
 ### File names from URLs (`fileNameFromUrl`)
 

@@ -21,7 +21,9 @@ CREATE TABLE DownloadRecordEntity (
     final_path TEXT,
     request_headers TEXT,
     checksum_algorithm TEXT,
-    checksum_hash TEXT
+    checksum_hash TEXT,
+    background_task_id INTEGER,
+    resume_data BLOB
 );
 
 CREATE INDEX idx_download_state ON DownloadRecordEntity(state);
@@ -126,6 +128,18 @@ UPDATE DownloadRecordEntity
 SET state = 'PAUSED',
     updated_at_epoch_ms = :reconciledAtEpochMs
 WHERE state IN ('CONNECTING', 'DOWNLOADING', 'QUEUED');
+
+updateBackgroundTask:
+UPDATE DownloadRecordEntity
+SET background_task_id = :backgroundTaskId,
+    resume_data = :resumeData
+WHERE id = :id;
+
+selectBackgroundTask:
+SELECT background_task_id, resume_data FROM DownloadRecordEntity WHERE id = :id LIMIT 1;
+
+selectIdByBackgroundTask:
+SELECT id FROM DownloadRecordEntity WHERE background_task_id = :backgroundTaskId LIMIT 1;
 
 deleteById:
 DELETE FROM DownloadRecordEntity WHERE id = :id;

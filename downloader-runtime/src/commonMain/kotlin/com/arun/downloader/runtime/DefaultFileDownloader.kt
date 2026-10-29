@@ -9,6 +9,7 @@ import com.arun.downloader.core.model.DownloadRecord
 import com.arun.downloader.core.model.DownloadRequest
 import com.arun.downloader.core.model.DownloadState
 import com.arun.downloader.core.model.DownloaderConfig
+import com.arun.downloader.core.repository.BackgroundTransferEngine
 import com.arun.downloader.core.repository.DownloadFileSystem
 import com.arun.downloader.core.repository.DownloadRepository
 import com.arun.downloader.core.repository.NetworkTransport
@@ -37,16 +38,51 @@ class DefaultFileDownloader(
     private val repository: DownloadRepository,
     private val network: NetworkTransport,
     private val fileSystem: DownloadFileSystem,
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    /**
+     * Optional OS-level transfer engine (iOS background `NSURLSession`). When set, transfers are
+     * delegated to it so they continue while the app is suspended; [network] is then unused for
+     * downloading.
+     */
+    private val backgroundEngine: BackgroundTransferEngine? = null
 ) : FileDownloader {
+
+    init {
+        backgroundEngine?.attach()
+    }
 
     private val scheduler = DownloadScheduler(config.maxConcurrentDownloads, scope)
     private val taskMutex = Mutex()
     private val activeTasks = MutableStateFlow<Map<DownloadId, DownloadTask>>(emptyMap())
     private val fallbackStateFlows = mutableMapOf<DownloadId, StateFlow<DownloadState>>()
 
-    override suspend fun enqueue(request: DownloadRequest): DownloadId {
-        val id = DownloadId.generate()
+    override suspend fun enqueue(request: DownloadRequest): DownloadId =
+        enqueue(request, DownloadId.generate())
+
+    override suspend fun enqueue(request: DownloadRequest, id: DownloadId): DownloadId {
+        val existing = repository.getById(id)
+        if (existing != null) {
+            if (backgroundEngine != null) {
+                if (existing.state != "COMPLETED" && existing.state !in ACTIVE_STATES) resume(id)
+                return id
+            }
+            // Same id seen before (e.g. a WorkManager retry): reuse the record and .part file.
+            val live = taskMutex.withLock { activeTasks.value[id] }
+            val liveState = live?.state?.value
+            val terminal = liveState is DownloadState.Failed ||
+                liveState is DownloadState.Cancelled ||
+                liveState is DownloadState.Completed
+            if (live != null && terminal) {
+                // The previous attempt's task is finishing (its slot/registry entry is released
+                // just after the terminal state is published). Join it so resume() can re-schedule.
+                scheduler.cancel(id)
+            }
+            val alreadyRunning = live != null && !terminal
+            if (existing.state != "COMPLETED" && !alreadyRunning) {
+                resume(id)
+            }
+            return id
+        }
         val now = currentTimeEpochMs()
 
         repository.insertOrUpdate(
@@ -56,6 +92,11 @@ class DefaultFileDownloader(
             createdAtEpochMs = now,
             updatedAtEpochMs = now
         )
+
+        if (backgroundEngine != null) {
+            backgroundEngine.start(id, request)
+            return id
+        }
 
         val task = createDownloadTask(id, request)
         taskMutex.withLock {
@@ -118,6 +159,10 @@ class DefaultFileDownloader(
     }
 
     override suspend fun pause(id: DownloadId) {
+        if (backgroundEngine != null) {
+            backgroundEngine.pause(id)
+            return
+        }
         scheduler.pause(id)
         repository.updateState(id, "PAUSED", currentTimeEpochMs())
         taskMutex.withLock {
@@ -145,6 +190,11 @@ class DefaultFileDownloader(
             group = record.group
         )
 
+        if (backgroundEngine != null) {
+            backgroundEngine.start(id, request)
+            return
+        }
+
         val task = createDownloadTask(id, request)
         taskMutex.withLock {
             activeTasks.value = activeTasks.value + (id to task)
@@ -164,6 +214,7 @@ class DefaultFileDownloader(
     override suspend fun cancel(id: DownloadId) {
         // scheduler.cancel joins the running job, so the task has released its file handles
         // before the staging file is purged.
+        backgroundEngine?.cancel(id)
         scheduler.cancel(id)
         taskMutex.withLock {
             activeTasks.value = activeTasks.value - id
@@ -214,6 +265,7 @@ class DefaultFileDownloader(
         taskMutex.withLock {
             activeTasks.value = emptyMap()
         }
+        backgroundEngine?.close()
         network.close()
         scope.cancel()
     }
@@ -330,4 +382,8 @@ class DefaultFileDownloader(
     }
 
     private fun currentTimeEpochMs(): Long = EpochClock.nowEpochMs()
+
+    private companion object {
+        val ACTIVE_STATES = setOf("QUEUED", "CONNECTING", "DOWNLOADING")
+    }
 }

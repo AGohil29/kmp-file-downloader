@@ -88,7 +88,8 @@ val SAMPLE_DOWNLOADS = listOf(
 fun DownloadScreen(
     downloader: FileDownloader,
     paths: PlatformPaths,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onEnqueueBackground: ((url: String, fileName: String?) -> Unit)? = null
 ) {
     var urlInput by remember { mutableStateOf(SAMPLE_DOWNLOADS.first().url) }
     var fileNameInput by remember { mutableStateOf(SAMPLE_DOWNLOADS.first().fileName) }
@@ -212,6 +213,21 @@ fun DownloadScreen(
                                 shape = RoundedCornerShape(8.dp)
                             ) {
                                 Text("Enqueue All Samples")
+                            }
+                            if (onEnqueueBackground != null) {
+                                OutlinedButton(
+                                    onClick = {
+                                        if (urlInput.isNotBlank()) {
+                                            onEnqueueBackground(
+                                                urlInput.trim(),
+                                                fileNameInput.takeIf { it.isNotBlank() }
+                                            )
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text("Background")
+                                }
                             }
                             Button(
                                 onClick = {

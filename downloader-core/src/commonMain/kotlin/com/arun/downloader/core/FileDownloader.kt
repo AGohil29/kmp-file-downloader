@@ -23,6 +23,18 @@ interface FileDownloader {
     suspend fun enqueue(request: DownloadRequest): DownloadId
 
     /**
+     * Idempotent enqueue under a caller-supplied [id] (e.g. derived from a WorkManager work id).
+     *
+     * - No record for [id]: behaves like [enqueue] but uses [id].
+     * - Record exists and is `COMPLETED`, or its task is already running/queued: no-op.
+     * - Otherwise (paused, failed, cancelled, ...): resumes the existing download, reusing its
+     *   staging `.part` file so the transfer continues via HTTP Range instead of restarting.
+     *
+     * Safe to call again on every retry attempt of an external scheduler.
+     */
+    suspend fun enqueue(request: DownloadRequest, id: DownloadId): DownloadId
+
+    /**
      * Observes the reactive state of a specific download task.
      *
      * @param id The [DownloadId] returned when enqueuing.
