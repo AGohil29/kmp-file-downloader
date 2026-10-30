@@ -248,7 +248,7 @@ Published artifacts: `kmp-file-downloader` (runtime), `kmp-file-downloader-core`
 
 # Known limitations
 
-- There is no one-call factory yet;
+- There is no one-call factory yet; you assemble DefaultFileDownloader yourself (see above).
 - The **Pause** and **Cancel** buttons on the Android download notification are not wired up yet.
   Use `pause` / `cancel` on the downloader instance instead.
 - On iOS, ETag and Last-Modified are not recorded; resuming relies on the resume data iOS provides.

@@ -1,107 +1,97 @@
-import org.gradle.kotlin.dsl.registering
-import org.gradle.api.tasks.bundling.Jar
-import org.gradle.kotlin.dsl.getValue
-import org.gradle.kotlin.dsl.provideDelegate
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinMultiplatform
 
+/**
+ * Publishing convention for all library modules, targeting Maven Central via the Central Portal.
+ *
+ * Credentials / signing are read from Gradle properties (or ORG_GRADLE_PROJECT_* env vars on CI):
+ *   mavenCentralUsername, mavenCentralPassword      -> Central Portal *user token* (not your login)
+ *   signingInMemoryKey, signingInMemoryKeyPassword  -> ASCII-armored secret key (+ optional passphrase)
+ *   signingInMemoryKeyId                            -> optional, key id
+ */
 plugins {
-    id("maven-publish")
-    id("signing")
-    id("org.jetbrains.dokka")
+    id("com.vanniktech.maven.publish")
 }
 
-// Generate multiplatform Javadoc Jar required by Maven Central rules
-val dokkaJavadocJar by tasks.registering(Jar::class) {
-    archiveClassifier.set("javadoc")
-    from(tasks.named("dokkaHtml"))
+// Published artifact base name: downloader-runtime -> kmp-file-downloader,
+// downloader-core -> kmp-file-downloader-core, etc. The plugin appends target suffixes itself
+// (-desktop, -android, -iosarm64, ...).
+val publishedBaseName = when (val n = project.name) {
+    "downloader-runtime" -> "kmp-file-downloader"
+    else -> "kmp-file-downloader-" + n.removePrefix("downloader-")
 }
 
-// Ensure the LICENSE file is included in META-INF for all published JAR artifacts
+// Ship the LICENSE inside META-INF of every published jar.
 tasks.withType<Jar>().configureEach {
     from(rootProject.file("LICENSE")) {
         into("META-INF")
     }
 }
 
-fun resolveSecret(name: String): String? {
-    return (findProperty(name) as? String)
-        ?: (findProperty(name.lowercase()) as? String)
-        ?: System.getenv(name)
-        ?: System.getenv(name.uppercase())
-}
+val hasSigningKey: Boolean =
+    providers.gradleProperty("signingInMemoryKey").orNull?.isNotBlank() == true
 
-val resolvedUsername = resolveSecret("sonatypeUsername") ?: ""
-val resolvedPassword = resolveSecret("sonatypePassword") ?: ""
-val resolvedSigningKey = resolveSecret("signingKey")
-val resolvedSigningPassword = resolveSecret("signingPassword")
-
-// Published artifact base name: downloader-runtime -> kmp-file-downloader,
-// downloader-core -> kmp-file-downloader-core, etc.
-val publishedBaseName = when (val n = project.name) {
-    "downloader-runtime" -> "kmp-file-downloader"
-    else -> "kmp-file-downloader-" + n.removePrefix("downloader-")
-}
-
-publishing {
-    // Publish to Sonatype Central Portal
-    repositories {
-        maven {
-            name = "Sonatype"
-            val releasesRepoUrl = uri("https://oss.sonatype.org/service/local/staging/deploy/maven2/")
-            val snapshotsRepoUrl = uri("https://oss.sonatype.org/content/repositories/snapshots/")
-            url = if (version.toString().endsWith("SNAPSHOT")) snapshotsRepoUrl else releasesRepoUrl
-
-            credentials {
-                username = resolvedUsername
-                password = resolvedPassword
-            }
-        }
+mavenPublishing {
+    publishToMavenCentral()        // Central Portal. Release is reviewed/published in the portal UI.
+    if (hasSigningKey) {
+        signAllPublications()      // Required by Central; skipped locally so publishToMavenLocal works unsigned.
     }
 
-    // Configure POM metadata across all targets (Desktop, Android, iOS Native)
-    publications.withType<MavenPublication>().configureEach {
-        // Replaces only the project-name prefix, keeping target suffixes (-desktop, -android, -iosarm64...)
-        artifactId = artifactId.replaceFirst(project.name, publishedBaseName)
-        artifact(dokkaJavadocJar)
+    coordinates(
+        groupId = project.group.toString(),
+        artifactId = publishedBaseName,
+        version = project.version.toString()
+    )
 
-        pom {
-            name.set("KMP File Downloader")
-            description.set("A resilient, production-grade Kotlin Multiplatform file downloader supporting Android, iOS, and Desktop.")
+    // Central requires a javadoc jar; an empty one is accepted. Switch to
+    // JavadocJar.Dokka("dokkaHtml") later if you want real API docs in it.
+    configure(
+        KotlinMultiplatform(
+            javadocJar = JavadocJar.Empty(),
+            androidVariantsToPublish = listOf("release")
+        )
+    )
+
+    pom {
+        name.set("KMP File Downloader")
+        description.set("A resilient, production-grade Kotlin Multiplatform file downloader supporting Android, iOS, and Desktop.")
+        inceptionYear.set("2026")
+        url.set("https://github.com/AGohil29/kmp-file-downloader")
+
+        licenses {
+            license {
+                name.set("The Apache Software License, Version 2.0")
+                url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                distribution.set("repo")
+            }
+        }
+
+        developers {
+            developer {
+                id.set("AGohil29")
+                name.set("Arun Gohil")
+                url.set("https://github.com/AGohil29")
+            }
+        }
+
+        scm {
+            connection.set("scm:git:git://github.com/AGohil29/kmp-file-downloader.git")
+            developerConnection.set("scm:git:ssh://github.com/AGohil29/kmp-file-downloader.git")
             url.set("https://github.com/AGohil29/kmp-file-downloader")
-
-            licenses {
-                license {
-                    name.set("The Apache Software License, Version 2.0")
-                    url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
-                    distribution.set("repo")
-                }
-            }
-
-            developers {
-                developer {
-                    id.set("AGohil29")
-                    name.set("Arun Gohil")
-                    url.set("https://github.com/AGohil29")
-                }
-            }
-
-            scm {
-                connection.set("scm:git:git://github.com/AGohil29/kmp-file-downloader.git")
-                developerConnection.set("scm:git:ssh://github.com/AGohil29/kmp-file-downloader.git")
-                url.set("https://github.com/AGohil29/kmp-file-downloader")
-            }
         }
     }
 }
 
-// Cryptographic Signing via GPG/PGP
-signing {
-    if (!resolvedSigningKey.isNullOrBlank()) {
-        useInMemoryPgpKeys(resolvedSigningKey, resolvedSigningPassword)
-        sign(publishing.publications)
+// Fail loudly instead of uploading unsigned artifacts that Central would reject anyway.
+val requireSigningKeyForRelease = tasks.register("requireSigningKeyForRelease") {
+    val present = hasSigningKey
+    doLast {
+        check(present) {
+            "Refusing to publish to Maven Central without a signing key. " +
+                "Set ORG_GRADLE_PROJECT_signingInMemoryKey (and ...KeyPassword / ...KeyId if needed)."
+        }
     }
 }
-
-// Shared javadoc jar is signed by every Sign task; publish tasks must depend on signing
-tasks.withType<AbstractPublishToMaven>().configureEach {
-    dependsOn(tasks.withType<Sign>())
+tasks.matching { it.name.contains("MavenCentral") }.configureEach {
+    dependsOn(requireSigningKeyForRelease)
 }
