@@ -211,104 +211,26 @@ DownloaderConfig(
 Each `DownloadRequest` can set `priority`, custom `headers` (for example an `Authorization` header),
 `conflictStrategy`, `expectedChecksum` and a `group`.
 
-# Design
-
-## Architecture
-
-The core module defines the interfaces (`NetworkTransport`, `DownloadRepository`,
-`DownloadFileSystem`). The network, storage and filesystem modules implement them, and the runtime
-module wires everything together for each platform.
-
-```mermaid
-flowchart TD
-    App["Your app (commonMain)"] --> Runtime["downloader-runtime<br/>DefaultFileDownloader + platform glue"]
-    Runtime --> Core["downloader-core<br/>FileDownloader API, scheduler, DownloadTask, state machine"]
-    Runtime --> Network["downloader-network<br/>Ktor transport"]
-    Runtime --> Storage["downloader-storage<br/>SQLDelight repository"]
-    Runtime --> FS["downloader-filesystem<br/>Okio file system"]
-    Network -.implements.-> Core
-    Storage -.implements.-> Core
-    FS -.implements.-> Core
-    Runtime --> Android["Android: foreground service, notifications, WorkManager"]
-    Runtime --> IOS["iOS: background NSURLSession bridge"]
-    Runtime --> Desktop["Desktop: path resolver, shutdown hook"]
-```
-
-## Life of a download
+# How it works
 
 ```mermaid
 flowchart LR
-    A["enqueue(request)"] --> B["Save record in database"]
-    B --> C["Scheduler<br/>priority queue, max concurrent"]
-    C --> D["DownloadTask"]
-    D --> E["HTTP request<br/>Range + If-Range on resume"]
-    E --> F["Stream bytes to<br/>staging .part file"]
-    F --> G{"Size and checksum OK?"}
-    G -- Yes --> H["Atomic move to destination"]
-    H --> I["Completed"]
-    G -- No --> J["Failed"]
-    D -. progress and state .-> K["StateFlow + database"]
-    K -.-> L["observe / observeAll in your UI"]
+    A["enqueue()"] --> B["Queue<br/>priority and concurrency limit"]
+    B --> C["Download<br/>HTTP Range on resume"]
+    C --> D["Validate<br/>size and checksum"]
+    D --> E["Completed<br/>file moved to destination"]
+    C -.-> F["observe() in your UI"]
 ```
 
-## Download states
+Bytes are written to a staging `.part` file and moved to the destination only after validation. When
+a download is resumed, the library asks the server for the remaining bytes (`Range` with `If-Range`).
+If the file changed or the server cannot continue, it restarts from the beginning instead of mixing
+two versions. The checksum, when requested, is computed over the complete file. More detail in
+[HTTP range / resume](docs/engine/http-range-resume.md) and the
+[architecture overview](docs/architecture/overview.md).
 
-```mermaid
-stateDiagram-v2
-    [*] --> Idle
-    Idle --> Queued: enqueue
-    Queued --> Connecting: slot acquired
-    Connecting --> Downloading: headers received
-    Downloading --> Downloading: progress
-    Downloading --> Paused: pause
-    Downloading --> Validating: all bytes received
-    Validating --> Completed: size and checksum OK
-    Validating --> Failed: mismatch
-    Paused --> Connecting: resume
-    Failed --> Connecting: retry
-    Queued --> Paused: pause
-    Connecting --> Paused: pause
-    Queued --> Failed: error
-    Connecting --> Failed: error
-    Downloading --> Failed: error
-    Idle --> Cancelled: cancel
-    Queued --> Cancelled: cancel
-    Connecting --> Cancelled: cancel
-    Downloading --> Cancelled: cancel
-    Paused --> Cancelled: cancel
-    Validating --> Cancelled: cancel
-    Failed --> Cancelled: cancel
-    Completed --> [*]
-    Cancelled --> [*]
-```
-
-## How resuming works
-
-```mermaid
-flowchart TD
-    A["resume / retry"] --> B{"Partial .part file?"}
-    B -- No --> F["Fresh request"]
-    B -- Yes --> C{"Strong ETag or<br/>Last-Modified stored?"}
-    C -- No --> D["Delete .part<br/>fresh request"]
-    C -- Yes --> E["Request with Range + If-Range"]
-    E --> G{"Server response"}
-    G -- "206, matching Content-Range" --> H["Append to .part"]
-    G -- "200: changed or no Range support" --> I["Delete .part<br/>restart from byte 0"]
-    G -- "412: changed while paused" --> I
-    G -- "416: range not satisfiable" --> J{"Staged size equals<br/>total size?"}
-    J -- Yes --> K["Skip download<br/>go to validation"]
-    J -- No --> I
-    F --> L["Stream to .part"]
-    D --> L
-    H --> L
-    I --> L
-    L --> M["Validate size and checksum<br/>then atomic move"]
-    K --> M
-```
-
-The final size is verified when the server reports one, and the checksum (when requested) is
-computed over the complete file, including the part that was downloaded earlier. More detail in
-[HTTP range / resume](docs/engine/http-range-resume.md).
+States: `Idle`, `Queued`, `Connecting`, `Downloading`, `Paused`, `Validating`, `Completed`,
+`Failed` and `Cancelled`.
 
 # Modules
 
@@ -345,9 +267,9 @@ Sample apps for Android, iOS and Desktop are in [`samples/`](samples/).
 
 Issues and pull requests are welcome. Please run the tests before submitting.
 
-## Contact
+## Contact Me
 
-Arun Gohil, [@AGohil29](https://github.com/AGohil29)
+[LinkedIn](https://www.linkedin.com/in/arun-gohil-210427187/)
 
 ## If this project helps you, show love
 
