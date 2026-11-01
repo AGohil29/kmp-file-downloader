@@ -1,10 +1,10 @@
-<p align="center">
-  <img src="assets/logo.png" alt="KMP File Downloader" width="160"/>
-</p>
-
 # KMP File Downloader
 
 ### A resumable file downloader library for Kotlin Multiplatform: Android, iOS and Desktop
+
+<p align="center">
+  <img src="assets/logo.png" alt="KMP File Downloader" width="160"/>
+</p>
 
 <!-- Add after the first release:
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.agohil29/kmp-file-downloader)](https://central.sonatype.com/artifact/io.github.agohil29/kmp-file-downloader)

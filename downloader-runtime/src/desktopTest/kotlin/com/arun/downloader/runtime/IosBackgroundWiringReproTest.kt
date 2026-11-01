@@ -40,7 +40,10 @@ class IosBackgroundWiringReproTest {
         // Everything that builds a downloader for iOS (library + samples), excluding the bridge itself
         val iosSources = listOf("downloader-runtime", "samples/sample-common", "samples/sample-ios")
             .flatMap { kotlinSources(repoRoot / it / "src") }
-            .filter { it.toString().contains("/iosMain/") || it.toString().contains("/commonMain/") }
+            .filter {
+                val normalized = it.toString().replace('\\', '/')
+                normalized.contains("/iosMain/") || normalized.contains("/commonMain/")
+            }
             .filter { it != bridgeFile && it.name != "IosAppDelegateHelper.kt" }
 
         val referencing = iosSources.filter { "IosBackgroundSessionBridge" in read(it) }
