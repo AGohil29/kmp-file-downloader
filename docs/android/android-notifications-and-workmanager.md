@@ -73,8 +73,16 @@ A `CoroutineWorker` that runs one download as WorkManager background work.
   1. Fails immediately if no URL.
   2. Builds a progress notification and calls `setForeground(ForegroundInfo(...))` (with the
      `dataSync` type on API 29+); failures to promote are swallowed.
-  3. Obtains a `FileDownloader` via `downloaderProvider`, enqueues a `DownloadRequest`, and waits
+  3. Obtains a `FileDownloader` via `downloaderProvider`, calls
+     `enqueue(request, DownloadId("wm_<workId>"))`, and waits
      with `observe(id).first { Completed | Failed | Cancelled }`.
+     **Retries resume instead of restarting:** WorkManager keeps the same work id across
+     `Result.retry()` attempts, so the id-based `enqueue` is idempotent. If a record for that id
+     exists it is resumed (reusing its `.part` file via HTTP Range), a `COMPLETED` one is left as
+     is, and a still-running task is not duplicated. Previously every attempt called
+     `enqueue(request)`, which minted a new `DownloadId`, a new record and a new `.part` file, so
+     each retry restarted from byte 0 and orphaned the old partial file. Covered by
+     `WorkerRetryRestartsFromZeroReproTest`.
   4. Maps the terminal state: `Completed` → `Result.success` with output path/size; `Failed` with
      `canRetry` and `runAttemptCount < 3` → `Result.retry()`, otherwise `Result.failure()`;
      `Cancelled` → `Result.failure()`. Any thrown exception retries up to 3 attempts.

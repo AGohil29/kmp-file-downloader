@@ -1,8 +1,10 @@
 # Android Sample (`samples:sample-android`)
 
 A Compose Android app that wires the library modules together with the Android SQLite driver and
-the Ktor OkHttp engine. It mirrors the [desktop sample](desktop-sample.md) UI: enqueue a URL, then
-pause, resume, retry and delete downloads from a live list.
+the Ktor OkHttp engine. It uses the shared `DownloadScreen` from `samples:sample-common`, so the UI
+matches the [desktop sample](desktop-sample.md): pick one of the preset sample URLs (videos, an
+image and a PDF — see [Sample URLs](desktop-sample.md#sample-urls)) or type your own, enqueue one
+or *Enqueue All Samples*, then pause, resume, retry and delete downloads from a live list.
 
 Source: `samples/sample-android/src/main/java/com/arun/downloader/sample/android/MainActivity.kt`
 
@@ -55,6 +57,15 @@ include(":samples:sample-android")
 - Known totals show a determinate bar, clamped to 0–100%.
 - Byte counts and speed update while data is still arriving; see
   [`progress-streaming.md`](../testing/progress-streaming.md).
+
+## Background downloads via WorkManager
+
+The **Background** button on the download screen calls `WorkManager.enqueueBackgroundDownload(...)`,
+which runs `DownloadWorkManagerWorker`. `MainActivity` sets
+`DownloadWorkManagerWorker.downloaderFactoryOverride` to the screen's downloader so the worker shares
+its queue and database. `DownloadScreen` exposes this through the optional `onEnqueueBackground`
+callback (other platforms leave it unset and the button is hidden). If work runs after a process
+restart before the activity opens, the override is not set yet; set it in an `Application` class.
 
 ## Testing
 

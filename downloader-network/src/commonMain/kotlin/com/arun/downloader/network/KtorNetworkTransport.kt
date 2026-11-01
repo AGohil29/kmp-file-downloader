@@ -34,6 +34,10 @@ class KtorNetworkTransport(
 
                     // Apply HTTP Range headers if specified
                     if (request.rangeStart != null) {
+                        // Byte offsets address the identity representation; a compressed body
+                        // would make Range/Content-Range semantics ambiguous.
+                        remove(HttpHeaders.AcceptEncoding)
+                        append(HttpHeaders.AcceptEncoding, "identity")
                         val end = request.rangeEnd?.toString() ?: ""
                         append(HttpHeaders.Range, "bytes=${request.rangeStart}-$end")
                         request.ifRange?.let { append(HttpHeaders.IfRange, it) }
@@ -49,7 +53,12 @@ class KtorNetworkTransport(
 
             // Error translation based on status code
             if (status >= 400) {
-                mapAndThrowHttpError(status, httpResponse.headers[HttpHeaders.RetryAfter])
+                mapAndThrowHttpError(
+                    status,
+                    httpResponse.headers[HttpHeaders.RetryAfter],
+                    request.rangeStart != null,
+                    httpResponse.headers[HttpHeaders.ContentRange]
+                )
             }
 
             val rawHeaders = mutableMapOf<String, String>()
@@ -98,7 +107,12 @@ class KtorNetworkTransport(
         }
     }
 
-    private fun mapAndThrowHttpError(statusCode: Int, retryAfterHeader: String?): Nothing {
+    private fun mapAndThrowHttpError(
+        statusCode: Int,
+        retryAfterHeader: String?,
+        rangeRequested: Boolean,
+        contentRangeHeader: String?
+    ): Nothing {
         when (statusCode) {
             HttpStatusCode.TooManyRequests.value -> {
                 val retryAfterMs = retryAfterHeader?.toLongOrNull()?.times(1000L)
@@ -125,8 +139,25 @@ class KtorNetworkTransport(
             }
 
             HttpStatusCode.RequestedRangeNotSatisfiable.value -> {
-                throw DownloadError.NonRetryable.ServerDoesNotSupportRange(
-                    message = "Requested byte range not satisfiable (HTTP 416)."
+                if (!rangeRequested) {
+                    throw DownloadError.NonRetryable.ServerDoesNotSupportRange(
+                        message = "Server answered HTTP 416 to a request without a Range header."
+                    )
+                }
+                val total = contentRangeHeader
+                    ?.substringAfterLast('/', "")
+                    ?.trim()
+                    ?.toLongOrNull()
+                throw DownloadError.NonRetryable.RangeNotSatisfiable(totalBytes = total)
+            }
+
+            HttpStatusCode.PreconditionFailed.value -> {
+                if (rangeRequested) {
+                    throw DownloadError.NonRetryable.PreconditionFailed()
+                }
+                throw DownloadError.NonRetryable.HttpError(
+                    httpCode = statusCode,
+                    message = "HTTP request failed with status $statusCode."
                 )
             }
 

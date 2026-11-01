@@ -1,0 +1,42 @@
+name: Release to Maven Central
+
+# Push a tag like v0.1.0 to publish. The tag must match `version` in build.gradle.kts.
+on:
+  push:
+    tags: [ 'v*' ]
+
+jobs:
+  publish:
+    # macOS is required to build the iOS (Apple) artifacts.
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check tag matches project version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION=$(grep -E '^\s*version\s*=' build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "tag=$TAG version=$VERSION"
+          test "$TAG" = "$VERSION"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Run tests
+        run: ./gradlew desktopTest --stacktrace
+
+      - name: Publish to Central Portal (upload only; release it in the portal)
+        run: ./gradlew publishToMavenCentral --no-configuration-cache --stacktrace
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyId: ${{ secrets.SIGNING_KEY_ID }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_KEY_PASSWORD }}

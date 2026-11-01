@@ -128,6 +128,19 @@ see [`docs/engine/download-task.md`](../engine/download-task.md) for the full de
 | `checksumMismatchDeletesOrFailsGracefully`                  | A wrong `expectedChecksum` causes `Failed(ChecksumMismatch)`, and the destination file is never created.                                                   |
 | `cancellationPreservesPartialFileAndEntersPausedState`      | Cancelling the job mid-stream results in `Paused` (in-memory state *and* persisted DB state `"PAUSED"`), without crashing or losing the partial file.      |
 
+## Test cases in `ResumeRetryRequestLossReproTest`
+
+Drives `DefaultFileDownloader` end to end: the first attempt fails with a retryable error, then
+the test calls `retry()`/`resume()`.
+
+| Test                                            | What it verifies                                                                          |
+|-------------------------------------------------|-------------------------------------------------------------------------------------------|
+| `retryMustResendAuthHeaders`                    | The retried request carries the original `Authorization` header.                          |
+| `resumeMustResendAuthHeaders`                   | Same for `resume()`.                                                                      |
+| `retryMustStillValidateChecksum`                | A corrupt payload on retry ends as `FAILED` instead of being committed.                   |
+| `rangedResumeMustValidateChecksumOverWholeFile` | A corrupt on-disk prefix + genuine `206` tail fails with `ChecksumMismatch`.              |
+| `rangedResumeWithGenuinePrefixCompletes`        | A genuine prefix + `206` tail passes whole-file validation and commits the correct bytes. |
+
 ## Module dependency diagram
 
 ```mermaid

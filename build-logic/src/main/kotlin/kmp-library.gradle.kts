@@ -10,7 +10,8 @@ plugins {
 val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
 
 extensions.configure<LibraryExtension> {
-    namespace = "com.arun.downloader"
+    // Unique per module: downloader-core -> com.arun.downloader.core, etc.
+    namespace = "com.arun.downloader.${project.name.removePrefix("downloader-").replace('-', '.')}"
     compileSdk = 36
     defaultConfig {
         minSdk = 24
@@ -57,7 +58,7 @@ extensions.configure<KotlinMultiplatformExtension> {
     sourceSets.apply {
         commonMain.dependencies {
             implementation(libs.findLibrary("kotlinx-coroutines-core").get())
-            implementation(libs.findLibrary("okio").get())
+            api(libs.findLibrary("okio").get())
         }
         commonTest.dependencies {
             implementation(libs.findLibrary("kotlin-test").get())

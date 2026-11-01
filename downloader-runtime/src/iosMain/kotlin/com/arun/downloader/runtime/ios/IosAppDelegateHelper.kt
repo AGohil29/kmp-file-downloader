@@ -21,8 +21,15 @@ package com.arun.downloader.runtime.ios
 object IosAppDelegateHelper {
     private var bridge: IosBackgroundSessionBridge? = null
 
+    // The OS may call the app delegate before the downloader (and its bridge) is created.
+    private val pendingHandlers = mutableMapOf<String, () -> Unit>()
+
     fun attachBridge(activeBridge: IosBackgroundSessionBridge) {
         bridge = activeBridge
+        pendingHandlers.forEach { (identifier, handler) ->
+            activeBridge.registerBackgroundCompletionHandler(identifier, handler)
+        }
+        pendingHandlers.clear()
     }
 
     fun handleEventsForBackgroundURLSession(identifier: String, completionHandler: () -> Unit) {
@@ -30,8 +37,8 @@ object IosAppDelegateHelper {
         if (activeBridge != null) {
             activeBridge.registerBackgroundCompletionHandler(identifier, completionHandler)
         } else {
-            // Immediately invoke callback if bridge is unattached to release iOS system assertion
-            completionHandler()
+            // Keep the handler until the bridge is attached; it runs once all events are processed.
+            pendingHandlers[identifier] = completionHandler
         }
     }
 }

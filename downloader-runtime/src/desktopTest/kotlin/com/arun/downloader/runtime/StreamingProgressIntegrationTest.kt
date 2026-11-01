@@ -204,6 +204,7 @@ class StreamingProgressIntegrationTest {
                         exchange.responseBody.use { it.write(payload, offset, payload.size - offset) }
                         return@createContext
                     }
+                    exchange.responseHeaders.add("ETag", "\"fixture-v1\"")
                     exchange.sendResponseHeaders(200, if (knownLength) payload.size.toLong() else 0)
                     val gate = if (exchange.requestURI.query == "second") releaseSecondChunk else releaseChunk
                     exchange.responseBody.use { body ->

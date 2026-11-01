@@ -57,7 +57,7 @@ suspend fun execute() = withContext(ioDispatcher) {
 
         fileSystem.atomicMove(stagingPartFile, finalDestinationPath)
         stateMachine.transition(DownloadStateEvent.Complete(...))
-        repository.markCompleted(id, completionTime)
+        repository.markCompleted(id, finalDestinationPath, completionTime)
     } catch (cancellation: CancellationException) { ... }
     catch (e: Throwable) { ... }
     finally {
@@ -69,7 +69,11 @@ suspend fun execute() = withContext(ioDispatcher) {
 1. Writes stream to a **staging** file (`stagingDirectory/.downloader_staging/<id>.part`), never
    directly to the destination — so a half-written file is never visible at the final path.
 2. Validates the downloaded byte count against `Content-Length` (if known), and optionally the
-   checksum (`MD5`/`SHA1`/`SHA256`) via an `okio.HashingSink` wrapped around the staging sink.
+   checksum (`MD5`/`SHA1`/`SHA256`). Fresh downloads are hashed in-stream via an
+   `okio.HashingSink` wrapped around the staging sink; ranged (HTTP 206) resumes hash the whole
+   staged file via `DownloadFileSystem.source()` + `okio.HashingSource`, so resumed downloads are
+   validated too (see [`http-range-resume.md`](http-range-resume.md)). The `request` passed in by
+   `resume()`/`retry()` carries the original headers and checksum, restored from storage.
 3. Only after validation succeeds does it perform an **atomic move** from staging to the final
    destination — this two-phase (write-then-commit) design means a crash mid-download never
    corrupts or partially overwrites a previously completed file.
@@ -214,5 +218,10 @@ target:
 | `androidMain` / `desktopMain` | `System.currentTimeMillis()`                        |
 | `iosMain`                     | `clock_gettime_nsec_np(CLOCK_REALTIME) / 1_000_000` |
 
-This keeps `DownloadTask` fully in `commonMain` while still getting a monotonic wall-clock value
+This keeps `DownloadTask` fully in `commonMain` while still getting a wall-clock epoch value
 per platform, without pulling in `kotlinx-datetime` for a single timestamp read.
+
+The same function is exposed to other modules as `com.arun.downloader.core.time.EpochClock`
+(`EpochClock.nowEpochMs()`). `DefaultFileDownloader` uses it for all persisted timestamps; it
+previously used a monotonic `TimeSource`, which produced values of about `0`.
+

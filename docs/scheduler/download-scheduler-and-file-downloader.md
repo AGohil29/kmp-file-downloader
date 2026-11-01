@@ -288,6 +288,19 @@ starting and finishing, and lets `observe()` return the *live* `StateFlow` for i
    with stale entries.
 4. Returns the `DownloadId` immediately — the actual transfer runs asynchronously on `scope`.
 
+### `enqueue(request, id)` — idempotent enqueue
+
+`enqueue(request, id: DownloadId)` lets an external scheduler (e.g. a WorkManager worker) supply a
+stable id. `enqueue(request)` simply delegates with `DownloadId.generate()`.
+
+- No record for `id` → inserted and scheduled like a normal enqueue.
+- Record `COMPLETED`, or a non-terminal live task exists → no-op.
+- Otherwise (paused/failed/cancelled, or a task that just published its terminal state) → the
+  old job is joined via `scheduler.cancel(id)` if needed, then `resume(id)` re-schedules it, reusing
+  the staging `.part` file so the transfer continues with an HTTP Range request.
+
+See [Android WorkManager](../android/android-notifications-and-workmanager.md).
+
 ### `observe(id)` — live vs. cold reconstruction
 
 - If the download is active (in `activeTasks`), its real `DownloadTask.state` is returned directly.
@@ -344,7 +357,10 @@ override suspend fun resume(id: DownloadId) {
         destinationDirectory = record.destinationDirectory,
         fileName = record.fileName ?: record.url.substringAfterLast('/'),
         priority = record.priority,
-        conflictStrategy = record.conflictStrategy
+        headers = record.headers,
+        conflictStrategy = record.conflictStrategy,
+        expectedChecksum = record.expectedChecksum,
+        group = record.group
     )
 
     val task = createDownloadTask(id, request)
@@ -355,9 +371,11 @@ override suspend fun resume(id: DownloadId) {
 }
 ```
 
-- Reconstructs a `DownloadRequest` from the **persisted `DownloadRecord`** (not from any
+- Reconstructs the **full** `DownloadRequest` from the **persisted `DownloadRecord`** (not from any
   in-memory state — this is what allows resuming a download after an app restart, since nothing
-  about the original request needs to survive in memory).
+  about the original request needs to survive in memory). Every request field is restored:
+  `headers`, `expectedChecksum` and `group` included (see
+  [Persisted request data](#persisted-request-data-headers--checksum) below).
 - Guards against resuming a download that's already `COMPLETED` or currently `DOWNLOADING` (a
   no-op safety check to avoid double-starting a task).
 - Otherwise flips the record back to `"QUEUED"` and re-enqueues a fresh `DownloadTask` through the
@@ -378,6 +396,44 @@ Currently a direct alias for `resume` — a `FAILED` download is retried the sam
 one is resumed (both go through the same "reconstruct request from record, re-enqueue" path). No
 separate retry-specific logic (e.g. exponential backoff, retry-count limits) exists yet.
 
+### Persisted request data (headers & checksum)
+
+**Bug fixed.** `resume()`/`retry()` used to rebuild the request with only `url`,
+`destinationDirectory`, `fileName`, `priority` and `conflictStrategy`. `headers` and
+`expectedChecksum` were never persisted, so they silently fell back to their defaults
+(`emptyMap()` / `null`):
+
+- a resumed/retried download was sent **without auth headers** (e.g. `Authorization`) and could
+  fail authentication;
+- **checksum validation was skipped**, so a corrupt payload could be committed as `COMPLETED`.
+
+**Fix.**
+
+- `DownloadRecord` gained `headers: Map<String, String> = emptyMap()` and
+  `expectedChecksum: ChecksumValidation? = null`.
+- `DownloadRecordEntity` gained three nullable columns, written by `insertOrReplaceRecord` and
+  mapped back in `toDomain()`:
+
+  | Column               | Content                                                                                                                    |
+  |----------------------|----------------------------------------------------------------------------------------------------------------------------|
+  | `request_headers`    | headers encoded by `HeaderCodec` as `k1=v1&k2=v2` (`%`, `=`, `&` and control chars are percent-encoded); `NULL` when empty |
+  | `checksum_algorithm` | `ChecksumValidation.Algorithm.name` (`MD5`/`SHA1`/`SHA256`)                                                                |
+  | `checksum_hash`      | expected hex digest                                                                                                        |
+
+- **Migration:** `2.sqm` (schema v2 → v3) adds the columns for drivers that use
+  `DownloadDatabase.Schema.migrate` (Android, iOS). The desktop `DatabaseDriverFactory`
+  `migrateLegacySchema` adds any missing column on an existing file. Rows written before the
+  migration read back as "no headers / no checksum".
+- `resume()` passes `headers`, `expectedChecksum` and `group` into the rebuilt request.
+
+> **Security note:** headers are stored in plain text in the downloads database so a download can
+> resume after a process restart. If they contain long-lived secrets, protect the database file
+> (e.g. SQLCipher / platform encryption) or use short-lived tokens.
+
+Regression tests: `ResumeRetryRequestLossReproTest` (`downloader-runtime/src/desktopTest`) checks
+that retry/resume resend the original headers and that a corrupt payload ends as `FAILED`, and
+`SqlDelightDownloadRepositoryTest.headersAndChecksumRoundTrip` checks the storage round trip.
+
 ### `delete(id, deleteFiles)`
 
 ```kotlin
@@ -385,23 +441,20 @@ override suspend fun delete(id: DownloadId, deleteFiles: Boolean) {
     cancel(id)
     val record = repository.getById(id)
     if (deleteFiles && record != null) {
-        val partFile = config.stagingDirectory / ".downloader_staging" / "${id.raw}.part"
-        fileSystem.delete(partFile)
-
-        val resolvedFileName = record.fileName ?: record.url.substringAfterLast('/')
-        val destinationFile = record.destinationDirectory / resolvedFileName
-        fileSystem.delete(destinationFile)
+        record.finalPath?.let { fileSystem.delete(it) }
     }
     repository.delete(id)
 }
 ```
 
 1. First cancels any in-flight/queued work for the id (reusing `cancel`'s scheduler + in-memory
-   cleanup, plus marking the record `"CANCELLED"`, before it's deleted outright).
-2. If `deleteFiles` is true (the default), removes **both** possible on-disk artifacts: the
-   staging `.part` file (present if the download was ever paused/partial) and the final
-   destination file (present if it had already completed) — computed using the same
-   `.downloader_staging/<id>.part` convention `DownloadTask` uses internally.
+   cleanup, plus marking the record `"CANCELLED"`, before it's deleted outright). `cancel` itself
+   now deletes the staging `.part` file once the scheduler has joined the job (so file handles
+   are released) and then persists `"CANCELLED"`; a cancelled download no longer leaves partial
+   data behind. Covered by `CancelPurgesPartFileReproTest`.
+2. If `deleteFiles` is true (the default), removes the committed file recorded in
+   `record.finalPath` (present if the download had completed). The staging `.part` file is already
+   gone because of step 1.
 3. Finally removes the database record entirely via `repository.delete(id)`.
 
 ### Download groups
@@ -480,12 +533,58 @@ finish cleanup before the rest of the teardown runs.
   `"COMPLETED"`, `"FAILED"`, `"CANCELLED"`) into the corresponding typed `DownloadState` sealed
   class instance, reconstructing whatever fields are available on the record (bytes, totals,
   etag/lastModified, error message) — any unrecognized state string falls back to
-  `DownloadState.Idle(id)`.
+  `DownloadState.Idle(id)`. For `Completed`, the path is `record.finalPath`; only legacy records
+  without it fall back to `destinationDirectory / (fileName ?: fileNameFromUrl(url))`.
+- For `FAILED` records, the error is rebuilt by the private `restoreError(errorType, errorMessage)`
+  from the persisted `error_type` (the `DownloadError` subclass simple name) and `error_message`,
+  and `canRetry` is `error is DownloadError.Retryable` — the same rule `DownloadTask` applies live.
+  Previously every failure was rebuilt as `NonRetryable.Unknown` with `canRetry = true`, so the
+  concrete type and retryability were lost after a restart. Unknown/missing types still fall back
+  to `NonRetryable.Unknown(message ?: "Failed")`.
+  - Only type and message are persisted, so structured fields (`httpCode`, `expected`/`actual`
+    checksum, paths, disk-space numbers) are parsed best-effort from the default message formats.
+    `RateLimited.retryAfterMs` and `RangeNotSatisfiable.totalBytes` are restored as `null`.
+  - Covered by `FailedStateRestoreReproTest` (`downloader-runtime` `desktopTest`).
 
-> **Note (pre-existing, not part of this change's scope):** `currentTimeEpochMs()` in this file is
-> implemented as `TimeSource.Monotonic.markNow().elapsedNow().inWholeMilliseconds`, which returns
-> the elapsed time since the mark was just taken (effectively ~0), **not** a wall-clock epoch
-> timestamp — unlike `DownloadTask`'s own `getSystemClockEpochMs()` expect/actual (see
-> [`docs/engine/download-task.md`](../engine/download-task.md)), which correctly reads the
-> platform's real clock. This looks like a latent bug worth fixing in a follow-up, but is called
-> out here for visibility rather than fixed as part of documenting these changes.
+### Background transfer engine (`backgroundEngine`)
+
+`DefaultFileDownloader` accepts an optional `BackgroundTransferEngine` (core). When set (iOS:
+`IosBackgroundSessionBridge`), `enqueue`, `resume`, `pause` and `cancel` delegate to it instead of the
+scheduler/`DownloadTask`/`NetworkTransport`; the engine writes state to the repository and `observe`
+falls back to persisted records. `enqueue` with an existing id only resumes if the record is not
+`QUEUED`/`CONNECTING`/`DOWNLOADING`/`COMPLETED`. Storage gained `background_task_id` and
+`resume_data` columns (migration `3.sqm`) behind `BackgroundTaskStore`. See
+`docs/runtime/ios-integration.md`.
+
+### File names from URLs (`fileNameFromUrl`)
+
+`substringAfterLast('/')` kept query strings, fragments and percent-escapes (`a.zip?token=1`,
+`my%20file.zip`). `core.engine.fileNameFromUrl(url)` (used by `DownloadTask`,
+`DefaultFileDownloader` and `IosBackgroundSessionBridge`) drops `?query`/`#fragment`, takes the
+last path segment and percent-decodes it (UTF-8). A bare host or trailing `/` yields `""`, which
+`sanitizeFileName` turns into a generated fallback name. Tests: `UrlFileNameTest`,
+`UrlFileNameReproTest`.
+
+### Timestamps (`EpochClock`) — bug fixed
+
+`currentTimeEpochMs()` used to be
+`TimeSource.Monotonic.markNow().elapsedNow().inWholeMilliseconds`, which measures the time since a
+mark taken on the same line (≈ 0) instead of a wall-clock time. Every timestamp written by
+`DefaultFileDownloader` (`createdAtEpochMs`, `updatedAtEpochMs`, `Queued` enqueue time, scheduler
+ordering) was therefore about `0`.
+
+It now delegates to the shared `com.arun.downloader.core.time.EpochClock`:
+
+```kotlin
+object EpochClock {
+    fun nowEpochMs(): Long = getSystemClockEpochMs()
+}
+
+private fun currentTimeEpochMs(): Long = EpochClock.nowEpochMs()
+```
+
+`EpochClock` (in `downloader-core`) wraps the same platform `getSystemClockEpochMs()`
+expect/actual that `DownloadTask` uses (see
+[`docs/engine/download-task.md`](../engine/download-task.md#platform-clock-expectactual)), so the
+engine and runtime share one wall-clock source. Do not use a monotonic `TimeSource` for persisted
+timestamps. Covered by `downloader-runtime/src/desktopTest/.../TimestampEpochReproTest.kt`.

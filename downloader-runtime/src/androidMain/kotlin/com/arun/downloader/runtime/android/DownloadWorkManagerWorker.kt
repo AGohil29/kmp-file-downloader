@@ -8,6 +8,7 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.arun.downloader.core.FileDownloader
+import com.arun.downloader.core.model.DownloadId
 import com.arun.downloader.core.model.DownloadRequest
 import com.arun.downloader.core.model.DownloadState
 import kotlinx.coroutines.flow.first
@@ -65,7 +66,10 @@ class DownloadWorkManagerWorker(
                 destinationDirectory = destDir.toPath(),
                 fileName = fileName
             )
-            val id = downloader.enqueue(request)
+            // WorkManager keeps the same work id across Result.retry() attempts. Using it as the
+            // DownloadId makes enqueue idempotent: a retry resumes the existing record and its
+            // .part file (HTTP Range) instead of creating a new download that restarts at zero.
+            val id = downloader.enqueue(request, DownloadId("wm_${this.id}"))
 
             // Await terminal state using Flow.first to terminate cleanly
             val terminalState = downloader.observe(id).first { state ->

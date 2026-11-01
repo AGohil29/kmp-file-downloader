@@ -17,7 +17,13 @@ CREATE TABLE DownloadRecordEntity (
     error_message TEXT,
     created_at_epoch_ms INTEGER NOT NULL,
     updated_at_epoch_ms INTEGER NOT NULL,
-    download_group TEXT
+    download_group TEXT,
+    final_path TEXT,
+    request_headers TEXT,
+    checksum_algorithm TEXT,
+    checksum_hash TEXT,
+    background_task_id INTEGER,
+    resume_data BLOB
 );
 
 CREATE INDEX idx_download_state ON DownloadRecordEntity(state);
@@ -41,7 +47,10 @@ INSERT OR REPLACE INTO DownloadRecordEntity(
     error_message,
     created_at_epoch_ms,
     updated_at_epoch_ms,
-    download_group
+    download_group,
+    request_headers,
+    checksum_algorithm,
+    checksum_hash
 ) VALUES (
     :id,
     :url,
@@ -58,7 +67,10 @@ INSERT OR REPLACE INTO DownloadRecordEntity(
     :errorMessage,
     :createdAtEpochMs,
     :updatedAtEpochMs,
-    :downloadGroup
+    :downloadGroup,
+    :requestHeaders,
+    :checksumAlgorithm,
+    :checksumHash
 );
 
 selectById:
@@ -107,6 +119,7 @@ SET state = 'COMPLETED',
     downloaded_bytes = COALESCE(total_bytes, downloaded_bytes),
     error_type = NULL,
     error_message = NULL,
+    final_path = :finalPath,
     updated_at_epoch_ms = :updatedAtEpochMs
 WHERE id = :id;
 
@@ -115,6 +128,18 @@ UPDATE DownloadRecordEntity
 SET state = 'PAUSED',
     updated_at_epoch_ms = :reconciledAtEpochMs
 WHERE state IN ('CONNECTING', 'DOWNLOADING', 'QUEUED');
+
+updateBackgroundTask:
+UPDATE DownloadRecordEntity
+SET background_task_id = :backgroundTaskId,
+    resume_data = :resumeData
+WHERE id = :id;
+
+selectBackgroundTask:
+SELECT background_task_id, resume_data FROM DownloadRecordEntity WHERE id = :id LIMIT 1;
+
+selectIdByBackgroundTask:
+SELECT id FROM DownloadRecordEntity WHERE background_task_id = :backgroundTaskId LIMIT 1;
 
 deleteById:
 DELETE FROM DownloadRecordEntity WHERE id = :id;

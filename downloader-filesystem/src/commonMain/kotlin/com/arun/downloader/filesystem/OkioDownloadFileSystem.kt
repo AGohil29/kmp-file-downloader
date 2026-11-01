@@ -7,6 +7,7 @@ import okio.FileSystem
 import okio.Path
 import okio.SYSTEM
 import okio.Sink
+import okio.Source
 
 class OkioDownloadFileSystem(
     private val fs: FileSystem = FileSystem.SYSTEM
@@ -34,6 +35,14 @@ class OkioDownloadFileSystem(
         path.parent?.let { createDirectories(it) }
         return try {
             if (append) fs.appendingSink(path) else fs.sink(path)
+        } catch (e: Exception) {
+            throw DownloadError.NonRetryable.FileSystemPermissionDenied(path.toString(), cause = e)
+        }
+    }
+
+    override fun source(path: Path): Source {
+        return try {
+            fs.source(path)
         } catch (e: Exception) {
             throw DownloadError.NonRetryable.FileSystemPermissionDenied(path.toString(), cause = e)
         }

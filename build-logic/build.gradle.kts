@@ -13,4 +13,5 @@ dependencies {
     implementation(libs.gradlePlugin.android)
     implementation(libs.gradlePlugin.sqldelight)
     implementation(libs.gradlePlugin.dokka)
+    implementation(libs.gradlePlugin.mavenPublish)
 }

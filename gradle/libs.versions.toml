@@ -13,6 +13,8 @@ compose-multiplatform = "1.7.3"
 turbine = "1.2.0"
 kotest = "5.9.1"
 dokka = "1.9.20"
+# 0.34.x supports Gradle 8.5+/Kotlin 1.9.20+/AGP 8.0+ (0.36+ needs Gradle 9, Kotlin 2.2, AGP 8.13, Dokka v2)
+vanniktech-publish = "0.34.0"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
@@ -58,6 +60,7 @@ gradlePlugin-kotlin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", ve
 gradlePlugin-android = { module = "com.android.tools.build:gradle", version.ref = "agp" }
 gradlePlugin-sqldelight = { module = "app.cash.sqldelight:gradle-plugin", version.ref = "sqldelight" }
 gradlePlugin-dokka = { module = "org.jetbrains.dokka:dokka-gradle-plugin", version.ref = "dokka" }
+gradlePlugin-mavenPublish = { module = "com.vanniktech:gradle-maven-publish-plugin", version.ref = "vanniktech-publish" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

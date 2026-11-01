@@ -48,5 +48,19 @@ actual class DatabaseDriverFactory(
                 0
             )
         }
+        if ("final_path" !in columns) {
+            driver.execute(null, "ALTER TABLE DownloadRecordEntity ADD COLUMN final_path TEXT", 0)
+        }
+        for (column in listOf("request_headers", "checksum_algorithm", "checksum_hash")) {
+            if (column !in columns) {
+                driver.execute(null, "ALTER TABLE DownloadRecordEntity ADD COLUMN $column TEXT", 0)
+            }
+        }
+        if ("background_task_id" !in columns) {
+            driver.execute(null, "ALTER TABLE DownloadRecordEntity ADD COLUMN background_task_id INTEGER", 0)
+        }
+        if ("resume_data" !in columns) {
+            driver.execute(null, "ALTER TABLE DownloadRecordEntity ADD COLUMN resume_data BLOB", 0)
+        }
     }
 }

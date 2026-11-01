@@ -185,6 +185,11 @@ downloader.shutdown()                   // on app termination
 After a process restart, downloads that were queued or in flight come back as `Paused` and can
 be resumed.
 
+Downloads that had `Failed` keep their error type after a restart (e.g. `HttpError`,
+`ChecksumMismatch`, `NetworkTimeout`), and `canRetry` is `true` only for `Retryable` errors.
+Structured fields are recovered from the stored message, so `RateLimited.retryAfterMs` and
+`RangeNotSatisfiable.totalBytes` come back as `null`.
+
 ---
 
 ## Next steps
@@ -193,4 +198,3 @@ be resumed.
 - [Scheduler, public API and `DefaultFileDownloader`](scheduler/download-scheduler-and-file-downloader.md)
 - [HTTP range / resume](engine/http-range-resume.md)
 - [Testing docs](testing/download-state-machine.md)
-
