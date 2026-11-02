@@ -3,7 +3,7 @@
 ### A resumable file downloader library for Kotlin Multiplatform: Android, iOS and Desktop
 
 <p align="center">
-  <img src="assets/logo.png" alt="KMP File Downloader" width="160"/>
+  <img src="assets/logo.png" alt="KMP File Downloader" width="512"/>
 </p>
 
 <!-- Add after the first release:
